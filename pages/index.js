@@ -225,7 +225,7 @@ export default function Dashboard() {
         .btn:disabled{opacity:.6;cursor:default}
         .btn:focus-visible,.gate input:focus-visible{outline:2px solid #2EE6C5;outline-offset:2px}
         .bad{color:#FF8FA3;font-size:13px}
-        @media (max-width:700px){.page{padding:20px 16px 40px}.mname{width:104px}.zones{padding-left:150px}}
+        @media (max-width:700px){.page{padding:20px 16px 40px}.mrow{flex-wrap:wrap;row-gap:6px}.mname{width:100%}.zones{padding:0 40px 0 36px;font-size:11px;gap:6px}}
         @media (prefers-reduced-motion:reduce){.mark{transition:none}}
       `}</style>
     </div>
