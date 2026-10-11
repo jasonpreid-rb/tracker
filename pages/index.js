@@ -52,16 +52,16 @@ export default function Dashboard() {
       const r = await fetch('/api/metrics', { headers: { 'x-dashboard-key': k } });
       const j = await r.json();
       if (!r.ok) throw new Error(r.status === 401 ? 'That key is not right. Check DASHBOARD_KEY and try again.' : j.error);
-      sessionStorage.setItem('dk', k);
+      localStorage.setItem('dk', k);
       setData(j);
     } catch (e) {
-      sessionStorage.removeItem('dk'); setData(null); setErr(e.message);
+      localStorage.removeItem('dk'); setData(null); setErr(e.message);
     }
     setBusy(false);
   }, []);
 
   useEffect(() => {
-    const k = sessionStorage.getItem('dk');
+    const k = localStorage.getItem('dk');
     if (k) { setKey(k); load(k); }
   }, [load]);
 
