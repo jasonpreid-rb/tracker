@@ -40,6 +40,16 @@ function Chart({ sites }) {
 
 const fmt = (n) => (n == null ? '–' : n.toLocaleString('en'));
 
+// Rows for the "Real use" card, built from the GA4 data for one site
+function useRows(g) {
+  const rows = [['Users', fmt(g.users)], ['Sessions', fmt(g.sessions)], ['Page views', fmt(g.pageViews)]];
+  for (const [name, v] of Object.entries(g.events || {})) {
+    rows.push([name.replace(/_/g, ' '), `${fmt(v.count)} times, ${fmt(v.users)} users`]);
+  }
+  if (g.path) rows.push([`Visits to ${g.path.prefix}`, `${fmt(g.path.views)} views, ${fmt(g.path.users)} users`]);
+  return rows;
+}
+
 export default function Dashboard() {
   const [key, setKey] = useState('');
   const [data, setData] = useState(null);
@@ -149,6 +159,24 @@ export default function Dashboard() {
                 {s.queries.length === 0 && !s.error && <div className="row">No queries yet</div>}
                 {s.queries.map((q) => <div className="row" key={q.query}><span>{q.query}</span><span>{fmt(q.impressions)}</span></div>)}
                 {s.error && <div className="bad">Search Console: {s.error}</div>}
+              </div>
+            ))}
+          </div>
+
+          <div className="grid3">
+            {data.sites.map((s) => (
+              <div className="card" key={s.key}>
+                <h2 className="sitehead"><span className="dot" style={{ background: s.color, boxShadow: `0 0 10px ${s.color}` }} />{s.name}: real use</h2>
+                <div className="lbl" style={{ marginTop: 6 }}>Google Analytics, same 28 days</div>
+                {s.ga4 && (
+                  <>
+                    <div className="row th"><span>Measure</span><span>Last 28 days</span></div>
+                    {useRows(s.ga4).map(([label, value]) => <div className="row" key={label}><span>{label}</span><span>{value}</span></div>)}
+                  </>
+                )}
+                {!s.ga4 && !s.ga4Error && <div className="row">Not connected yet</div>}
+                {s.ga4Error && <div className="bad">Google Analytics: {s.ga4Error}</div>}
+                {s.key === 'rb' && <div className="lbl">Registrations and submissions are in Supabase, not shown here.</div>}
               </div>
             ))}
           </div>
