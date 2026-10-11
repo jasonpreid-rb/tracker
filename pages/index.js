@@ -40,6 +40,23 @@ function Chart({ sites }) {
 
 const fmt = (n) => (n == null ? '–' : n.toLocaleString('en'));
 
+// Small lines under each site's meter score
+function vitalityLabel(v) {
+  if (!v) return 'No score yet';
+  const move = v.change == null ? '' : ` (${v.change > 0 ? '+' : v.change < 0 ? '−' : '±'}${Math.abs(v.change)} vs last month)`;
+  return `${v.score} / 100${move}`;
+}
+function vitalityNotes(v, baselineDays = 90) {
+  if (!v) return [];
+  const notes = [];
+  if (v.baseline) notes.push(`Baseline, month ${Math.floor(v.ageDays / 30) + 1} of ${Math.round(baselineDays / 30)}`);
+  if (v.trend) {
+    if (v.trend.enough && v.trend.pct != null) notes.push(`Impressions ${v.trend.pct > 0 ? '+' : v.trend.pct < 0 ? '−' : ''}${Math.abs(v.trend.pct)}% vs previous 28 days`);
+    else notes.push('Too little data for a trend yet');
+  }
+  return notes;
+}
+
 // Rows for the "Real use" card, built from the GA4 data for one site
 function useRows(g) {
   const rows = [['Users', fmt(g.users)], ['Sessions', fmt(g.sessions)], ['Page views', fmt(g.pageViews)]];
@@ -130,25 +147,32 @@ export default function Dashboard() {
           <div className="card meters">
             <div>
               <h2>Is each site worth pursuing?</h2>
-              <div className="lbl">One marker per site, from its latest row in the Sites tab (five answers scored 0 to 20).</div>
+              <div className="lbl">One marker per site, scored monthly (five answers, 0 to 20 each). Visibility is calculated from the impressions trend once there is enough data.</div>
             </div>
             {data.sites.map((s) => (
               <div className="mrow" key={s.key}>
                 <div className="mname">
                   <span className="dot" style={{ background: s.color, boxShadow: `0 0 10px ${s.color}` }} />
-                  <div><div>{s.name}</div><div className="lbl">{s.vitality ? `${s.vitality.score} / 100` : 'No score yet'}</div></div>
+                  <div>
+                    <div>{s.name}</div>
+                    <div className="lbl">{vitalityLabel(s.vitality)}</div>
+                    {vitalityNotes(s.vitality, data.baselineDays).map((t) => <div className="lbl" key={t}>{t}</div>)}
+                  </div>
                 </div>
                 <Coffin />
                 <div className="track">
                   <div className="bar" />
                   {s.vitality && (
-                    <div className="mark" style={{ left: `${s.vitality.score}%`, borderColor: s.color, boxShadow: `0 0 14px ${s.color}` }}>{s.short}</div>
+                    <div className="mark" style={{ left: `${s.vitality.score}%`, borderColor: s.color, borderStyle: s.vitality.baseline ? 'dashed' : 'solid', opacity: s.vitality.baseline ? 0.75 : 1, boxShadow: `0 0 14px ${s.color}` }}>{s.short}</div>
                   )}
                 </div>
                 <Sprout />
               </div>
             ))}
             <div className="zones"><span>Pause</span><span>Keep testing</span><span>Double down</span></div>
+            {data.sites.some((s) => s.vitality && s.vitality.baseline) && (
+              <div className="lbl">A dashed marker means a baseline site, under {Math.round((data.baselineDays || 90) / 30)} months old. Read its movement rather than its zone.</div>
+            )}
           </div>
 
           <div className="grid3">
@@ -214,11 +238,11 @@ export default function Dashboard() {
         .sitehead{display:flex;align-items:center;gap:8px}
         .meters{display:flex;flex-direction:column;gap:16px;padding:22px}
         .mrow{display:flex;align-items:center;gap:12px}
-        .mname{width:150px;flex:none;font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px}
+        .mname{width:190px;flex:none;font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px}
         .track{flex:1;min-width:0;position:relative;height:36px}
         .bar{position:absolute;left:0;right:0;top:14px;height:8px;border-radius:4px;background:linear-gradient(90deg,#FF5C7A,#FFB020 50%,#2EE6C5)}
         .mark{position:absolute;top:3px;width:30px;height:30px;margin-left:-15px;border-radius:50%;background:#0B0D14;border:3px solid;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;box-sizing:border-box;transition:left .6s}
-        .zones{display:flex;justify-content:space-between;font-size:12px;color:#A3ACC2;padding:0 40px 0 204px}
+        .zones{display:flex;justify-content:space-between;font-size:12px;color:#A3ACC2;padding:0 40px 0 244px}
         .gate{max-width:420px;display:flex;flex-direction:column;gap:12px}
         .gate input{background:#0B0D14;color:#F2F4FA;border:1px solid #2A3250;border-radius:8px;padding:10px 12px;font:inherit}
         .btn{background:linear-gradient(90deg,#FF2BA6,#FF7A3D);color:#0B0D14;font:inherit;font-weight:600;border:0;border-radius:999px;padding:10px 18px;cursor:pointer}
