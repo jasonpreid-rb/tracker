@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { SITES, getAuth, dateRange, searchData, sheetData, parseDate } from '../../lib/google';
+import { SITES, getAuth, dateRange, searchData, ga4Data, sheetData, parseDate } from '../../lib/google';
 
 const clamp = (n) => Math.min(20, Math.max(0, Number(n) || 0));
 const iso = (d) => d.toISOString().slice(0, 10);
@@ -84,6 +84,20 @@ async function liveMetrics() {
         return { ...meta, series: range.days.map((dt) => byDate.get(dt) || zero(dt)), queries: d.queries };
       } catch (e) {
         return { ...meta, series: range.days.map(zero), queries: [], error: String(e.message).slice(0, 200) };
+      }
+    })
+  );
+
+  // Google Analytics 4: real-use signals (skipped for a site with no GA4_* variable set)
+  await Promise.all(
+    sites.map(async (s) => {
+      const def = SITES.find((x) => x.key === s.key);
+      if (!def || !def.ga4) return;
+      try {
+        s.ga4 = await ga4Data(auth, def, range);
+      } catch (e) {
+        s.ga4 = null;
+        s.ga4Error = String(e.message).slice(0, 200);
       }
     })
   );
