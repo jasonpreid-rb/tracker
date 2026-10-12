@@ -36,7 +36,8 @@ function visibilityFromTrend(t) {
 }
 
 // Turns five 0-20 answers into the meter reading, with movement, baseline flag and trend
-function buildVitality(def, parts, trend, hist, now = new Date()) {
+// prev = { t, score } is the row before the latest in the Sites tab, so scoring weekly works with no other change
+function buildVitality(def, parts, trend, hist, prev = null, now = new Date()) {
   if (!Array.isArray(parts) || parts.length !== 5) return null;
   const nums = parts.map(clamp);
   const auto = visibilityFromTrend(trend);
@@ -46,7 +47,12 @@ function buildVitality(def, parts, trend, hist, now = new Date()) {
   const monthNow = iso(now).slice(0, 7);
   const past = (hist.scores || {})[def.key] || {};
   const prevMonth = Object.keys(past).filter((m) => m < monthNow).sort().pop();
-  const change = prevMonth ? score - Math.round(Number(past[prevMonth]) || 0) : null;
+  let change = prevMonth ? score - Math.round(Number(past[prevMonth]) || 0) : null;
+  let prevDate = null;
+  if (prev) {
+    change = score - prev.score;
+    prevDate = iso(new Date(prev.t));
+  }
 
   const launched = parseDate((hist.launched || {})[def.key]);
   const ageDays = launched ? Math.max(0, Math.floor((now.getTime() - launched.getTime()) / 864e5)) : null;
@@ -54,6 +60,7 @@ function buildVitality(def, parts, trend, hist, now = new Date()) {
   return {
     score,
     change,
+    prevDate,
     baseline: ageDays != null && ageDays < BASELINE_DAYS,
     ageDays,
     visibilityAuto: auto != null,
@@ -163,18 +170,20 @@ async function liveMetrics() {
     // Full live mode: scores, experiments and backlinks from the Google Sheet
     try {
       const raw = await sheetData(auth);
-      const latest = {};
+      const rows = {};
       for (const r of raw.sites) {
         const name = String(r[0] || '').trim().toLowerCase();
         const t = (parseDate(r[1]) || new Date(0)).getTime();
-        if (!latest[name] || t >= latest[name].t) {
-          latest[name] = { t, parts: [2, 3, 4, 5, 6].map((i) => r[i]) };
-        }
+        (rows[name] = rows[name] || []).push({ t, parts: [2, 3, 4, 5, 6].map((i) => r[i]) });
       }
+      for (const name of Object.keys(rows)) rows[name].sort((a, b) => a.t - b.t);
       for (const s of sites) {
         const def = SITES.find((x) => x.key === s.key);
-        const v = latest[s.name.toLowerCase()];
-        s.vitality = v ? buildVitality(def, v.parts, s.trend, hist) : null;
+        const list = rows[s.name.toLowerCase()] || [];
+        const v = list[list.length - 1];
+        const p = list.length > 1 ? list[list.length - 2] : null;
+        const prev = p ? { t: p.t, score: p.parts.map(clamp).reduce((a, n) => a + n, 0) } : null;
+        s.vitality = v ? buildVitality(def, v.parts, s.trend, hist, prev) : null;
       }
       const cutoff = Date.now() - 28 * 864e5;
       const links = raw.backlinks

@@ -43,7 +43,7 @@ const fmt = (n) => (n == null ? '–' : n.toLocaleString('en'));
 // Small lines under each site's meter score
 function vitalityLabel(v) {
   if (!v) return 'No score yet';
-  const move = v.change == null ? '' : ` (${v.change > 0 ? '+' : v.change < 0 ? '−' : '±'}${Math.abs(v.change)} vs last month)`;
+  const move = v.change == null ? '' : ` (${v.change > 0 ? '+' : v.change < 0 ? '−' : '±'}${Math.abs(v.change)}${v.prevDate ? ` since ${v.prevDate}` : ' vs last month'})`;
   return `${v.score} / 100${move}`;
 }
 function vitalityNotes(v, baselineDays = 90) {
