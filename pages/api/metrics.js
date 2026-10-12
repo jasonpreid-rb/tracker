@@ -28,43 +28,65 @@ function readHistory() {
   }
 }
 
-// Visibility from the impressions trend: flat = 10, doubling = 15, quadrupling = 20, halving = 5, quartering = 0
-function visibilityFromTrend(t) {
-  if (!t || t.previous < MIN_PREVIOUS) return null;
-  const ratio = Math.max(t.current, 0.01) / t.previous;
-  return Math.round(clamp(10 + 5 * Math.log2(ratio)));
+// The five measures behind each meter, all calculated from live data. Each is 0 to 20 and the meter is their sum.
+const PARTS = ['Visibility', 'Momentum', 'Clicks', 'Real use', 'Return use'];
+// What counts as full marks. Scales are logarithmic, so the first few visits move the needle most.
+const TARGET = { impressions: 1000, clicks: 100, users: 200, actions: 50 }; // per 28 days
+// Launch dates for the baseline flag. Add one for a new site; data/history.json can still override.
+const LAUNCHED = { ez: '2026-09-24', ttc: '2026-09-24' };
+
+const lg = (n, full) => Math.min(1, Math.log10(1 + Math.max(0, n)) / Math.log10(1 + full));
+const sumOf = (a, f) => a.reduce((t, p) => t + (Number(p[f]) || 0), 0);
+
+function autoParts(site) {
+  const series = site.series || [];
+  const half = Math.floor(series.length / 2);
+  const impr = sumOf(series, 'impressions');
+  const early = sumOf(series.slice(0, half), 'impressions');
+  const late = sumOf(series.slice(half), 'impressions');
+  const g = site.ga4 || null;
+  const users = g ? Number(g.users) || 0 : 0;
+  const sessions = g ? Number(g.sessions) || 0 : 0;
+  const evs = g ? Object.values(g.events || {}) : [];
+  const tracked = evs.length > 0 || !!(g && g.path); // does this site have any actions set up in lib/google.js?
+  const actions = !g ? 0 : tracked ? evs.reduce((t, v) => t + (Number((v || {}).count) || 0), 0) + (g.path ? Number(g.path.views) || 0 : 0) : Number(g.pageViews) || 0;
+  return [
+    20 * lg(impr, TARGET.impressions), // Visibility: impressions in search, last 28 days
+    early + late === 0 ? 0 : 10 + 5 * Math.log2((late + 5) / (early + 5)), // Momentum: last 14 days against the 14 before, flat = 10
+    20 * lg(sumOf(series, 'clicks'), TARGET.clicks), // Clicks: people who actually arrived from search
+    10 * lg(users, TARGET.users) + 10 * lg(actions, TARGET.actions), // Real use: users, plus calculator and other tracked actions
+    users >= 5 ? 20 * (sessions / users - 1) : 0, // Return use: sessions per user, 1 = none, 2 or more = full marks
+  ].map((n) => Math.round(clamp(n)));
 }
 
-// Turns five 0-20 answers into the meter reading, with movement, baseline flag and trend
-// prev = { t, score } is the row before the latest in the Sites tab, so scoring weekly works with no other change
-function buildVitality(def, parts, trend, hist, prev = null, now = new Date()) {
-  if (!Array.isArray(parts) || parts.length !== 5) return null;
-  const nums = parts.map(clamp);
-  const auto = visibilityFromTrend(trend);
-  if (auto != null) nums[0] = auto;
+// The 28 days before the current window
+function priorRange(range, days = 28) {
+  const end = new Date(new Date(range.startDate + 'T00:00:00Z').getTime() - 864e5);
+  const start = new Date(end.getTime() - (days - 1) * 864e5);
+  const list = [];
+  for (let k = 0; k < days; k++) list.push(iso(new Date(start.getTime() + k * 864e5)));
+  return { startDate: iso(start), endDate: iso(end), days: list };
+}
+
+// Meter reading for one site, built only from its live Search Console and Analytics data
+function buildVitality(def, site, hist, now = new Date()) {
+  const nums = autoParts(site);
   const score = nums.reduce((a, n) => a + n, 0);
-
-  const monthNow = iso(now).slice(0, 7);
-  const past = (hist.scores || {})[def.key] || {};
-  const prevMonth = Object.keys(past).filter((m) => m < monthNow).sort().pop();
-  let change = prevMonth ? score - Math.round(Number(past[prevMonth]) || 0) : null;
-  let prevDate = null;
-  if (prev) {
-    change = score - prev.score;
-    prevDate = iso(new Date(prev.t));
-  }
-
-  const launched = parseDate((hist.launched || {})[def.key]);
+  const launched = parseDate((hist.launched || {})[def.key] || LAUNCHED[def.key]);
   const ageDays = launched ? Math.max(0, Math.floor((now.getTime() - launched.getTime()) / 864e5)) : null;
-
+  const trend = site.trend;
+  // Change against the previous 28 days, only once that period had enough search data to mean something
+  let change = null;
+  if (site.prior && sumOf(site.prior.series, 'impressions') >= MIN_PREVIOUS) {
+    change = score - autoParts(site.prior).reduce((a, n) => a + n, 0);
+  }
   return {
     score,
     change,
-    prevDate,
     baseline: ageDays != null && ageDays < BASELINE_DAYS,
     ageDays,
-    visibilityAuto: auto != null,
-    parts: nums,
+    auto: true,
+    parts: PARTS.map((label, k) => ({ label, score: nums[k] })),
     trend: trend
       ? {
           current: trend.current,
@@ -116,9 +138,9 @@ function manualMetrics() {
       key: s.key, name: s.name, short: s.short, color: s.color,
       series: range.days.map((dt) => byDate.get(dt) || { date: dt, impressions: 0, clicks: 0 }),
       queries: (d.queries || []).slice(0, 5).map((q) => ({ query: q[0], impressions: Number(q[1]) || 0, clicks: Number(q[2]) || 0 })),
-      vitality: buildVitality(s, extras.parts[s.key], null, hist),
     };
   });
+  sites.forEach((x) => { x.vitality = buildVitality(x, x, hist); });
   return {
     range: { startDate: range.startDate, endDate: range.endDate },
     sites,
@@ -164,27 +186,30 @@ async function liveMetrics() {
     })
   );
 
+  // Previous 28 days (Search Console and GA4), so the meter can show its movement
+  const prior = priorRange(range);
+  await Promise.all(
+    sites.map(async (s) => {
+      const def = SITES.find((x) => x.key === s.key);
+      if (!def || s.error) return;
+      try {
+        const [d, g] = await Promise.all([searchData(auth, def, prior), def.ga4 ? ga4Data(auth, def, prior) : null]);
+        const byDate = new Map(d.series.map((p) => [p.date, p]));
+        s.prior = { series: prior.days.map((dt) => byDate.get(dt) || zero(dt)), ga4: g };
+      } catch (e) {
+        s.prior = null;
+      }
+    })
+  );
+
+  sites.forEach((x) => { x.vitality = buildVitality(x, x, hist); delete x.prior; });
+
   let extra = { experiments: { running: null }, backlinks: { count: null, latest: [] }, sheetError: null };
 
   if (process.env.SHEET_ID) {
     // Full live mode: scores, experiments and backlinks from the Google Sheet
     try {
       const raw = await sheetData(auth);
-      const rows = {};
-      for (const r of raw.sites) {
-        const name = String(r[0] || '').trim().toLowerCase();
-        const t = (parseDate(r[1]) || new Date(0)).getTime();
-        (rows[name] = rows[name] || []).push({ t, parts: [2, 3, 4, 5, 6].map((i) => r[i]) });
-      }
-      for (const name of Object.keys(rows)) rows[name].sort((a, b) => a.t - b.t);
-      for (const s of sites) {
-        const def = SITES.find((x) => x.key === s.key);
-        const list = rows[s.name.toLowerCase()] || [];
-        const v = list[list.length - 1];
-        const p = list.length > 1 ? list[list.length - 2] : null;
-        const prev = p ? { t: p.t, score: p.parts.map(clamp).reduce((a, n) => a + n, 0) } : null;
-        s.vitality = v ? buildVitality(def, v.parts, s.trend, hist, prev) : null;
-      }
       const cutoff = Date.now() - 28 * 864e5;
       const links = raw.backlinks
         .filter((r) => r[2] && String(r[4] || 'yes').toLowerCase() !== 'no')
@@ -202,10 +227,6 @@ async function liveMetrics() {
     // Hybrid mode (no SHEET_ID): scores, experiments and backlinks stay in data/manual.json
     try {
       const x = manualExtras(readManual());
-      for (const s of sites) {
-        const def = SITES.find((d) => d.key === s.key);
-        s.vitality = buildVitality(def, x.parts[s.key], s.trend, hist);
-      }
       extra = { experiments: x.experiments, backlinks: x.backlinks, sheetError: null };
     } catch (e) {
       extra.sheetError = 'manual.json: ' + String(e.message).slice(0, 180);

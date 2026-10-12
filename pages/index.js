@@ -43,7 +43,7 @@ const fmt = (n) => (n == null ? '–' : n.toLocaleString('en'));
 // Small lines under each site's meter score
 function vitalityLabel(v) {
   if (!v) return 'No score yet';
-  const move = v.change == null ? '' : ` (${v.change > 0 ? '+' : v.change < 0 ? '−' : '±'}${Math.abs(v.change)}${v.prevDate ? ` since ${v.prevDate}` : ' vs last month'})`;
+  const move = v.change == null ? '' : ` (${v.change > 0 ? '+' : v.change < 0 ? '−' : '±'}${Math.abs(v.change)} vs previous 28 days)`;
   return `${v.score} / 100${move}`;
 }
 function vitalityNotes(v, baselineDays = 90) {
@@ -150,7 +150,7 @@ export default function Dashboard() {
           <div className="card meters">
             <div>
               <h2>Is each site worth pursuing?</h2>
-              <div className="lbl">One marker per site, scored monthly (five answers, 0 to 20 each). Visibility is calculated from the impressions trend once there is enough data.</div>
+              <div className="lbl">One marker per site, built automatically from Search Console and Google Analytics. Five measures, 0 to 20 each, nothing typed in by hand.</div>
             </div>
             {data.sites.map((s) => (
               <div className="mrow" key={s.key}>
@@ -160,6 +160,7 @@ export default function Dashboard() {
                     <div>{s.name}</div>
                     <div className="lbl">{vitalityLabel(s.vitality)}</div>
                     {vitalityNotes(s.vitality, data.baselineDays).map((t) => <div className="lbl" key={t}>{t}</div>)}
+                    {s.vitality && s.vitality.parts && <div className="lbl">{s.vitality.parts.map((p) => `${p.label} ${p.score}`).join(' · ')}</div>}
                   </div>
                 </div>
                 <Coffin />
