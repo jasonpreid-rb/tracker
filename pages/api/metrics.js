@@ -30,12 +30,13 @@ function readHistory() {
 
 // The five measures behind each meter, all calculated from live data. Each is 0 to 20 and the meter is their sum.
 const PARTS = ['Visibility', 'Momentum', 'Clicks', 'Real use', 'Return use'];
-// What counts as full marks. Scales are logarithmic, so the first few visits move the needle most.
+// What counts as full marks. Scales are square-root, so small numbers earn little until volume builds.
 const TARGET = { impressions: 1000, clicks: 100, users: 200, actions: 50 }; // per 28 days
 // Launch dates for the baseline flag. Add one for a new site; data/history.json can still override.
 const LAUNCHED = { ez: '2026-09-24', ttc: '2026-09-24' };
 
-const lg = (n, full) => Math.min(1, Math.log10(1 + Math.max(0, n)) / Math.log10(1 + full));
+// Square-root scale: tiny numbers earn little, and the score climbs as real volume builds up
+const lg = (n, full) => Math.min(1, Math.sqrt(Math.max(0, n) / full));
 const sumOf = (a, f) => a.reduce((t, p) => t + (Number(p[f]) || 0), 0);
 
 function autoParts(site) {
@@ -48,14 +49,14 @@ function autoParts(site) {
   const users = g ? Number(g.users) || 0 : 0;
   const sessions = g ? Number(g.sessions) || 0 : 0;
   const evs = g ? Object.values(g.events || {}) : [];
-  const tracked = evs.length > 0 || !!(g && g.path); // does this site have any actions set up in lib/google.js?
-  const actions = !g ? 0 : tracked ? evs.reduce((t, v) => t + (Number((v || {}).count) || 0), 0) + (g.path ? Number(g.path.views) || 0 : 0) : Number(g.pageViews) || 0;
+  // Tracked actions only: events set up in lib/google.js, plus visits to a site's app path. Page views are not counted.
+  const actions = !g ? 0 : evs.reduce((t, v) => t + (Number((v || {}).count) || 0), 0) + (g.path ? Number(g.path.views) || 0 : 0);
   return [
     20 * lg(impr, TARGET.impressions), // Visibility: impressions in search, last 28 days
-    early + late === 0 ? 0 : 10 + 5 * Math.log2((late + 5) / (early + 5)), // Momentum: last 14 days against the 14 before, flat = 10
+    (10 + 5 * Math.log2((late + 5) / (early + 5))) * Math.min(1, (early + late) / 200), // Momentum: last 14 days against the 14 before (flat = 10), weighted by volume
     20 * lg(sumOf(series, 'clicks'), TARGET.clicks), // Clicks: people who actually arrived from search
     10 * lg(users, TARGET.users) + 10 * lg(actions, TARGET.actions), // Real use: users, plus calculator and other tracked actions
-    users >= 5 ? 20 * (sessions / users - 1) : 0, // Return use: sessions per user, 1 = none, 2 or more = full marks
+    10 * Math.max(0, sessions / Math.max(users, 1) - 1) * Math.min(1, users / 100), // Return use: sessions per user (1 = none, 3 = full), weighted by how many users
   ].map((n) => Math.round(clamp(n)));
 }
 
