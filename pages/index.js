@@ -18,12 +18,14 @@ const Sprout = ({ w = 28 }) => (
   </svg>
 );
 
-function Chart({ sites }) {
-  const W = 900, H = 210, n = sites[0].series.length;
-  const max = Math.max(1, ...sites.flatMap((s) => s.series.map((p) => p.impressions)));
-  const pts = (s) => s.series.map((p, i) => `${(i / (n - 1)) * W},${H - 10 - (p.impressions / max) * (H - 30)}`).join(' ');
+// Main chart. metric is 'impressions' or 'clicks'.
+function Chart({ sites, metric = 'impressions' }) {
+  const W = 900, H = 210;
+  const n = Math.max(2, sites[0] ? sites[0].series.length : 2);
+  const max = Math.max(1, ...sites.flatMap((s) => s.series.map((p) => p[metric] || 0)));
+  const pts = (s) => s.series.map((p, i) => `${(i / (n - 1)) * W},${H - 10 - ((p[metric] || 0) / max) * (H - 30)}`).join(' ');
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 210, marginTop: 12 }} role="img" aria-label="Impressions per day for each site">
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 210, marginTop: 12 }} role="img" aria-label={`${metric} per day for each site shown`}>
       <defs>
         <filter id="glow" x="-5%" y="-30%" width="110%" height="160%">
           <feGaussianBlur stdDeviation="4" result="b" />
@@ -38,7 +40,29 @@ function Chart({ sites }) {
   );
 }
 
+// Small trend line for the per-site progress cards
+function Spark({ series, color, dash }) {
+  const W = 300, H = 56, n = Math.max(2, series.length);
+  const max = Math.max(1, ...series.map((p) => p.impressions || 0));
+  const pts = series.map((p, i) => `${(i / (n - 1)) * W},${H - 4 - ((p.impressions || 0) / max) * (H - 10)}`).join(' ');
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 56, marginTop: 8 }} role="img" aria-label="Impressions per day, last 28 days">
+      <polyline points={pts} fill="none" stroke={color} strokeWidth="3" strokeDasharray={dash} strokeLinecap="round" />
+    </svg>
+  );
+}
+
 const fmt = (n) => (n == null ? '–' : n.toLocaleString('en'));
+
+const norm = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const matchesSite = (l, s) => {
+  const x = norm(l.site);
+  if (!x) return false;
+  return [s.key, s.name, s.short].some((v) => {
+    const y = norm(v);
+    return y && (y === x || (y.length > 2 && x.includes(y)));
+  });
+};
 
 // Small lines under each site's meter score
 function vitalityLabel(v) {
@@ -54,6 +78,7 @@ function vitalityNotes(v, baselineDays = 90) {
     if (v.trend.enough && v.trend.pct != null) notes.push(`Impressions ${v.trend.pct > 0 ? '+' : v.trend.pct < 0 ? '−' : ''}${Math.abs(v.trend.pct)}% vs previous 28 days`);
     else notes.push('Too little data for a trend yet');
   }
+  if (v.confidence && v.confidence.level !== 'high') notes.push(`Confidence ${v.confidence.level}: ${v.confidence.note}`);
   return notes;
 }
 
@@ -64,7 +89,41 @@ function useRows(g) {
     rows.push([name.replace(/_/g, ' '), `${fmt(v.count)} times, ${fmt(v.users)} users`]);
   }
   if (g.path) rows.push([`Visits to ${g.path.prefix}`, `${fmt(g.path.views)} views, ${fmt(g.path.users)} users`]);
+  if (g.newUsers != null && g.users > 0) {
+    const back = Math.max(0, g.users - g.newUsers);
+    rows.push(['Returning users', `${fmt(back)} (${Math.round((back / g.users) * 100)}%)`]);
+    rows.push(['Engagement rate', `${Math.round((g.engagementRate || 0) * 100)}%`]);
+    rows.push(['Time engaged per user', `${fmt(Math.round((g.engagedSeconds || 0) / g.users))} seconds`]);
+  }
+  if (g.channels) rows.push(['Sessions from', `search ${fmt(g.channels.organic)}, direct ${fmt(g.channels.direct)}, links ${fmt(g.channels.referral)}`]);
   return rows;
+}
+
+// Change between two windows, as text
+function change(prev, cur) {
+  if (prev === 0 && cur === 0) return 'flat at 0';
+  if (prev === 0) return 'up from 0';
+  const pct = Math.round(((cur - prev) / prev) * 100);
+  return `${pct > 0 ? '+' : pct < 0 ? '−' : '±'}${Math.abs(pct)}% vs earlier half`;
+}
+
+// Progress for one site, from its daily series: second half of the window against the first half
+function progress(s) {
+  const ser = s.series || [];
+  const half = Math.floor(ser.length / 2);
+  const prev = ser.slice(0, half);
+  const cur = ser.slice(half);
+  const tot = (a, f) => a.reduce((x, p) => x + (p[f] || 0), 0);
+  const imp = tot(cur, 'impressions'), impPrev = tot(prev, 'impressions');
+  const clk = tot(cur, 'clicks'), clkPrev = tot(prev, 'clicks');
+  const allImp = tot(ser, 'impressions'), allClk = tot(ser, 'clicks');
+  return {
+    days: cur.length,
+    imp, impPrev, clk, clkPrev,
+    ctr: allImp > 0 ? ((allClk / allImp) * 100).toFixed(1) : null,
+    active: ser.filter((p) => (p.impressions || 0) > 0).length,
+    total: ser.length,
+  };
 }
 
 export default function Dashboard() {
@@ -72,6 +131,8 @@ export default function Dashboard() {
   const [data, setData] = useState(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  const [view, setView] = useState('all'); // 'all' or a site key
+  const [metric, setMetric] = useState('impressions');
 
   const load = useCallback(async (k) => {
     setBusy(true); setErr('');
@@ -92,7 +153,64 @@ export default function Dashboard() {
     if (k) { setKey(k); load(k); }
   }, [load]);
 
-  const sum = (f) => data.sites.reduce((a, s) => a + s.series.reduce((b, p) => b + p[f], 0), 0);
+  // Sites currently shown. Falls back to all if the chosen key is not in the data.
+  const picked = data && view !== 'all' ? data.sites.filter((s) => s.key === view) : [];
+  const shown = data ? (picked.length ? picked : data.sites) : [];
+  const single = shown.length === 1 ? shown[0] : null;
+  const scope = single ? single.name : 'all 3 sites';
+
+  const sum = (f) => shown.reduce((a, s) => a + s.series.reduce((b, p) => b + (p[f] || 0), 0), 0);
+
+  const backlinks = data
+    ? single
+      ? data.backlinks.latest.filter((l) => matchesSite(l, single))
+      : data.backlinks.latest
+    : [];
+
+  const progressCard = (s) => {
+    const p = progress(s);
+    return (
+      <div className="card" key={`p-${s.key}`}>
+        <h2 className="sitehead"><span className="dot" style={{ background: s.color, boxShadow: `0 0 10px ${s.color}` }} />{s.name}: progress</h2>
+        <div className="lbl" style={{ marginTop: 6 }}>Last {p.days} days against the {p.total - p.days} before</div>
+        <div className="row th"><span>Measure</span><span>Now</span></div>
+        <div className="row"><span>Impressions</span><span>{fmt(p.imp)} ({change(p.impPrev, p.imp)})</span></div>
+        <div className="row"><span>Clicks</span><span>{fmt(p.clk)} ({change(p.clkPrev, p.clk)})</span></div>
+        <div className="row"><span>Click rate, 28 days</span><span>{p.ctr == null ? '–' : `${p.ctr}%`}</span></div>
+        <div className="row"><span>Days with impressions</span><span>{p.active} of {p.total}</span></div>
+        {s.search && s.search.position != null && <div className="row"><span>Average position</span><span>{s.search.position}</span></div>}
+        {s.search && <div className="row"><span>Different queries</span><span>{fmt(s.search.queryCount)}{s.search.striking ? `, ${fmt(s.search.striking)} near page one` : ''}</span></div>}
+        <div className="row"><span>Meter score</span><span>{vitalityLabel(s.vitality)}</span></div>
+        <Spark series={s.series} color={s.color} dash={DASH[s.key]} />
+      </div>
+    );
+  };
+
+  const queriesCard = (s) => (
+    <div className="card" key={`q-${s.key}`}>
+      <h2 className="sitehead"><span className="dot" style={{ background: s.color, boxShadow: `0 0 10px ${s.color}` }} />{s.name}: top queries</h2>
+      <div className="row th"><span>Query</span><span>Impressions</span></div>
+      {s.queries.length === 0 && !s.error && <div className="row">No queries yet</div>}
+      {s.queries.map((q) => <div className="row" key={q.query}><span>{q.query}</span><span>{fmt(q.impressions)}{q.position != null ? `, pos ${q.position}` : ''}</span></div>)}
+      {s.error && <div className="bad">Search Console: {s.error}</div>}
+    </div>
+  );
+
+  const useCard = (s) => (
+    <div className="card" key={`u-${s.key}`}>
+      <h2 className="sitehead"><span className="dot" style={{ background: s.color, boxShadow: `0 0 10px ${s.color}` }} />{s.name}: real use</h2>
+      <div className="lbl" style={{ marginTop: 6 }}>Google Analytics, same 28 days</div>
+      {s.ga4 && (
+        <>
+          <div className="row th"><span>Measure</span><span>Last 28 days</span></div>
+          {useRows(s.ga4).map(([label, value]) => <div className="row" key={label}><span>{label}</span><span>{value}</span></div>)}
+        </>
+      )}
+      {!s.ga4 && !s.ga4Error && <div className="row">Not connected yet</div>}
+      {s.ga4Error && <div className="bad">Google Analytics: {s.ga4Error}</div>}
+      {s.key === 'rb' && <div className="lbl">Registrations and submissions are in Supabase, not shown here.</div>}
+    </div>
+  );
 
   return (
     <div className="page">
@@ -126,94 +244,113 @@ export default function Dashboard() {
 
       {data && (
         <>
+          <div className="tabs" role="group" aria-label="Choose which site to show">
+            <button className={`tab${!single ? ' on' : ''}`} aria-pressed={!single} onClick={() => setView('all')}>All sites</button>
+            {data.sites.map((s) => {
+              const on = !!single && single.key === s.key;
+              return (
+                <button key={s.key} className={`tab${on ? ' on' : ''}`} aria-pressed={on} onClick={() => setView(s.key)} style={on ? { borderColor: s.color, boxShadow: `0 0 12px ${s.color}55` } : undefined}>
+                  <span className="dot" style={{ background: s.color }} />{s.name}
+                </button>
+              );
+            })}
+          </div>
+
           <div className="grid4 cards">
-            <div className="card"><div className="lbl">Total impressions</div><div className="big">{fmt(sum('impressions'))}</div><div className="lbl">Search Console, all 3 sites</div></div>
-            <div className="card"><div className="lbl">Total clicks</div><div className="big">{fmt(sum('clicks'))}</div><div className="lbl">Search Console, all 3 sites</div></div>
-            <div className="card"><div className="lbl">Backlinks added</div><div className="big">{fmt(data.backlinks.count)}</div><div className="lbl">Last 28 days, Backlinks tab</div></div>
-            <div className="card"><div className="lbl">Experiments running</div><div className="big">{fmt(data.experiments.running)}</div><div className="lbl">No decision yet, Experiments tab</div></div>
+            <div className="card"><div className="lbl">Total impressions</div><div className="big">{fmt(sum('impressions'))}</div><div className="lbl">Search Console, {scope}</div></div>
+            <div className="card"><div className="lbl">Total clicks</div><div className="big">{fmt(sum('clicks'))}</div><div className="lbl">Search Console, {scope}</div></div>
+            <div className="card">
+              <div className="lbl">Backlinks added</div>
+              <div className="big">{fmt(single ? backlinks.length : data.backlinks.count)}</div>
+              <div className="lbl">{single ? 'In the latest list, this site' : 'Last 28 days, Backlinks tab'}</div>
+            </div>
+            <div className="card"><div className="lbl">Experiments running</div><div className="big">{fmt(data.experiments.running)}</div><div className="lbl">{single ? 'All sites, not split by site' : 'No decision yet, Experiments tab'}</div></div>
           </div>
           {data.sheetError && <div className="bad">Google Sheet problem: {data.sheetError}</div>}
 
           <div className="card">
             <div className="between">
-              <h2>Impressions per day, by site</h2>
-              <div className="legend">
-                {data.sites.map((s) => (
-                  <span key={s.key}><i style={{ borderTop: `3px ${DASH[s.key] ? (s.key === 'ttc' ? 'dotted' : 'dashed') : 'solid'} ${s.color}` }} />{s.name}</span>
-                ))}
+              <h2>{metric === 'clicks' ? 'Clicks' : 'Impressions'} per day{single ? `, ${single.name}` : ', by site'}</h2>
+              <div className="between" style={{ gap: 18 }}>
+                <div className="legend">
+                  {shown.map((s) => (
+                    <span key={s.key}><i style={{ borderTop: `3px ${DASH[s.key] ? (s.key === 'ttc' ? 'dotted' : 'dashed') : 'solid'} ${s.color}` }} />{s.name}</span>
+                  ))}
+                </div>
+                <div className="seg" role="group" aria-label="Chart measure">
+                  <button className={metric === 'impressions' ? 'on' : ''} aria-pressed={metric === 'impressions'} onClick={() => setMetric('impressions')}>Impressions</button>
+                  <button className={metric === 'clicks' ? 'on' : ''} aria-pressed={metric === 'clicks'} onClick={() => setMetric('clicks')}>Clicks</button>
+                </div>
               </div>
             </div>
-            <Chart sites={data.sites} />
-            {sum('impressions') === 0 && <div className="lbl">No impressions in this window yet, so every line sits at zero.</div>}
+            <Chart sites={shown} metric={metric} />
+            {sum(metric) === 0 && <div className="lbl">No {metric} in this window yet, so every line sits at zero.</div>}
           </div>
 
           <div className="card meters">
             <div>
-              <h2>Is each site worth pursuing?</h2>
-              <div className="lbl">One marker per site, built automatically from Search Console and Google Analytics. Five measures, 0 to 20 each, nothing typed in by hand.</div>
+              <h2>Is {single ? single.name : 'each site'} worth pursuing?</h2>
+              <div className="lbl">{single ? 'Five measures, 0 to 20 each, built automatically from Search Console and Google Analytics.' : 'One marker per site, built automatically from Search Console and Google Analytics. Five measures, 0 to 20 each, nothing typed in by hand.'}</div>
             </div>
-            {data.sites.map((s) => (
-              <div className="mrow" key={s.key}>
-                <div className="mname">
-                  <span className="dot" style={{ background: s.color, boxShadow: `0 0 10px ${s.color}` }} />
-                  <div>
-                    <div>{s.name}</div>
-                    <div className="lbl">{vitalityLabel(s.vitality)}</div>
-                    {vitalityNotes(s.vitality, data.baselineDays).map((t) => <div className="lbl" key={t}>{t}</div>)}
-                    {s.vitality && s.vitality.parts && <div className="lbl">{s.vitality.parts.map((p) => `${p.label} ${p.score}`).join(' · ')}</div>}
+            {shown.map((s) => (
+              <div key={s.key}>
+                <div className="mrow">
+                  <div className="mname">
+                    <span className="dot" style={{ background: s.color, boxShadow: `0 0 10px ${s.color}` }} />
+                    <div>
+                      <div>{s.name}</div>
+                      <div className="lbl">{vitalityLabel(s.vitality)}</div>
+                      {vitalityNotes(s.vitality, data.baselineDays).map((t) => <div className="lbl" key={t}>{t}</div>)}
+                      {!single && s.vitality && s.vitality.parts && <div className="lbl">{s.vitality.parts.map((p) => `${p.label} ${p.score}`).join(' · ')}</div>}
+                    </div>
                   </div>
+                  <Coffin />
+                  <div className="track">
+                    <div className="bar" />
+                    {s.vitality && (
+                      <div className="mark" style={{ left: `${s.vitality.score}%`, borderColor: s.color, borderStyle: s.vitality.baseline ? 'dashed' : 'solid', opacity: s.vitality.baseline ? 0.75 : 1, boxShadow: `0 0 14px ${s.color}` }}>{s.short}</div>
+                    )}
+                  </div>
+                  <Sprout />
                 </div>
-                <Coffin />
-                <div className="track">
-                  <div className="bar" />
-                  {s.vitality && (
-                    <div className="mark" style={{ left: `${s.vitality.score}%`, borderColor: s.color, borderStyle: s.vitality.baseline ? 'dashed' : 'solid', opacity: s.vitality.baseline ? 0.75 : 1, boxShadow: `0 0 14px ${s.color}` }}>{s.short}</div>
-                  )}
-                </div>
-                <Sprout />
+                {single && s.vitality && s.vitality.parts && (
+                  <div className="parts">
+                    {s.vitality.parts.map((p) => (
+                      <div className="part" key={p.label}>
+                        <div className="between"><span>{p.label}</span><span>{p.score} / {p.max || 20}</span></div>
+                        <div className="ptrack"><div className="pfill" style={{ width: `${Math.max(0, Math.min(100, (p.score / (p.max || 20)) * 100))}%`, background: s.color }} /></div>
+                        {p.note && <div className="lbl">{p.note}</div>}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
             <div className="zones"><span>Pause</span><span>Keep testing</span><span>Double down</span></div>
-            {data.sites.some((s) => s.vitality && s.vitality.baseline) && (
+            {shown.some((s) => s.vitality && s.vitality.baseline) && (
               <div className="lbl">A dashed marker means a baseline site, under {Math.round((data.baselineDays || 90) / 30)} months old. Read its movement rather than its zone.</div>
             )}
           </div>
 
-          <div className="grid3">
-            {data.sites.map((s) => (
-              <div className="card" key={s.key}>
-                <h2 className="sitehead"><span className="dot" style={{ background: s.color, boxShadow: `0 0 10px ${s.color}` }} />{s.name}: top queries</h2>
-                <div className="row th"><span>Query</span><span>Impressions</span></div>
-                {s.queries.length === 0 && !s.error && <div className="row">No queries yet</div>}
-                {s.queries.map((q) => <div className="row" key={q.query}><span>{q.query}</span><span>{fmt(q.impressions)}</span></div>)}
-                {s.error && <div className="bad">Search Console: {s.error}</div>}
-              </div>
-            ))}
-          </div>
-
-          <div className="grid3">
-            {data.sites.map((s) => (
-              <div className="card" key={s.key}>
-                <h2 className="sitehead"><span className="dot" style={{ background: s.color, boxShadow: `0 0 10px ${s.color}` }} />{s.name}: real use</h2>
-                <div className="lbl" style={{ marginTop: 6 }}>Google Analytics, same 28 days</div>
-                {s.ga4 && (
-                  <>
-                    <div className="row th"><span>Measure</span><span>Last 28 days</span></div>
-                    {useRows(s.ga4).map(([label, value]) => <div className="row" key={label}><span>{label}</span><span>{value}</span></div>)}
-                  </>
-                )}
-                {!s.ga4 && !s.ga4Error && <div className="row">Not connected yet</div>}
-                {s.ga4Error && <div className="bad">Google Analytics: {s.ga4Error}</div>}
-                {s.key === 'rb' && <div className="lbl">Registrations and submissions are in Supabase, not shown here.</div>}
-              </div>
-            ))}
-          </div>
+          {single ? (
+            <div className="grid3">
+              {progressCard(single)}
+              {queriesCard(single)}
+              {useCard(single)}
+            </div>
+          ) : (
+            <>
+              <div className="grid3">{shown.map(progressCard)}</div>
+              <div className="grid3">{shown.map(queriesCard)}</div>
+              <div className="grid3">{shown.map(useCard)}</div>
+            </>
+          )}
 
           <div className="card">
-            <h2>Latest backlinks</h2>
+            <h2>Latest backlinks{single ? `, ${single.name}` : ''}</h2>
             <div className="row th"><span>Source</span><span>Site</span></div>
-            {data.backlinks.latest.length === 0 && <div className="row">None logged yet</div>}
-            {data.backlinks.latest.map((l, i) => <div className="row" key={i}><span>{l.url}</span><span>{l.site}</span></div>)}
+            {backlinks.length === 0 && <div className="row">{single ? 'None logged yet for this site' : 'None logged yet'}</div>}
+            {backlinks.map((l, i) => <div className="row" key={i}><span>{l.url}</span><span>{l.site}</span></div>)}
           </div>
         </>
       )}
@@ -247,13 +384,26 @@ export default function Dashboard() {
         .bar{position:absolute;left:0;right:0;top:14px;height:8px;border-radius:4px;background:linear-gradient(90deg,#FF5C7A,#FFB020 50%,#2EE6C5)}
         .mark{position:absolute;top:3px;width:30px;height:30px;margin-left:-15px;border-radius:50%;background:#0B0D14;border:3px solid;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;box-sizing:border-box;transition:left .6s}
         .zones{display:flex;justify-content:space-between;font-size:12px;color:#A3ACC2;padding:0 40px 0 244px}
+        .parts{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px 20px;margin:14px 0 0 202px;padding-right:40px}
+        .part{font-size:13px;color:#F2F4FA;display:flex;flex-direction:column;gap:6px}
+        .part .between{gap:8px;flex-wrap:nowrap}
+        .part .between span:last-child{color:#A3ACC2}
+        .ptrack{height:6px;border-radius:3px;background:#2A3250;overflow:hidden}
+        .pfill{height:100%;border-radius:3px}
+        .tabs{display:flex;gap:10px;flex-wrap:wrap}
+        .tab{display:flex;align-items:center;gap:8px;background:#101424;color:#A3ACC2;font:inherit;font-size:14px;font-weight:500;border:1px solid #2A3250;border-radius:999px;padding:8px 16px;cursor:pointer}
+        .tab.on{color:#F2F4FA;background:#171C2E;border-color:#6C8CFF}
+        .tab:hover{color:#F2F4FA}
+        .seg{display:flex;border:1px solid #2A3250;border-radius:999px;overflow:hidden}
+        .seg button{background:transparent;color:#A3ACC2;font:inherit;font-size:12px;border:0;padding:6px 14px;cursor:pointer}
+        .seg button.on{background:#2A3250;color:#F2F4FA}
         .gate{max-width:420px;display:flex;flex-direction:column;gap:12px}
         .gate input{background:#0B0D14;color:#F2F4FA;border:1px solid #2A3250;border-radius:8px;padding:10px 12px;font:inherit}
         .btn{background:linear-gradient(90deg,#FF2BA6,#FF7A3D);color:#0B0D14;font:inherit;font-weight:600;border:0;border-radius:999px;padding:10px 18px;cursor:pointer}
         .btn:disabled{opacity:.6;cursor:default}
-        .btn:focus-visible,.gate input:focus-visible{outline:2px solid #2EE6C5;outline-offset:2px}
+        .btn:focus-visible,.gate input:focus-visible,.tab:focus-visible,.seg button:focus-visible{outline:2px solid #2EE6C5;outline-offset:2px}
         .bad{color:#FF8FA3;font-size:13px}
-        @media (max-width:700px){.page{padding:20px 16px 40px}.mrow{flex-wrap:wrap;row-gap:6px}.mname{width:100%}.zones{padding:0 40px 0 36px;font-size:11px;gap:6px}}
+        @media (max-width:700px){.page{padding:20px 16px 40px}.mrow{flex-wrap:wrap;row-gap:6px}.mname{width:100%}.zones{padding:0 40px 0 36px;font-size:11px;gap:6px}.parts{margin:14px 0 0 0;padding-right:0}}
         @media (prefers-reduced-motion:reduce){.mark{transition:none}}
       `}</style>
     </div>

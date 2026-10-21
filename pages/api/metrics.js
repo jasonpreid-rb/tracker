@@ -29,9 +29,10 @@ function readHistory() {
 }
 
 // The five measures behind each meter, all calculated from live data. Each is 0 to 20 and the meter is their sum.
-const PARTS = ['Visibility', 'Momentum', 'Clicks', 'Real use', 'Return use'];
+const PARTS = ['Visibility', 'Momentum', 'Clicks and rank', 'Real use', 'Return use'];
 // What counts as full marks. Scales are square-root, so small numbers earn little until volume builds.
 const TARGET = { impressions: 1000, clicks: 100, users: 200, actions: 50 }; // per 28 days
+const GOOD = { returning: 0.25, engagedSecs: 60 }; // full marks for Return use: share of users who came back, seconds engaged per user
 // Launch dates for the baseline flag. Add one for a new site; data/history.json can still override.
 const LAUNCHED = { ez: '2026-09-24', ttc: '2026-09-24' };
 
@@ -39,25 +40,98 @@ const LAUNCHED = { ez: '2026-09-24', ttc: '2026-09-24' };
 const lg = (n, full) => Math.min(1, Math.sqrt(Math.max(0, n) / full));
 const sumOf = (a, f) => a.reduce((t, p) => t + (Number(p[f]) || 0), 0);
 
-function autoParts(site) {
+const num = (v) => Number(v) || 0;
+const fmtN = (n) => Math.round(n).toLocaleString('en');
+
+// The raw numbers behind the five measures, so the scores, their notes and the confidence flag all read the same data
+function autoStats(site) {
   const series = site.series || [];
   const half = Math.floor(series.length / 2);
-  const impr = sumOf(series, 'impressions');
-  const early = sumOf(series.slice(0, half), 'impressions');
-  const late = sumOf(series.slice(half), 'impressions');
   const g = site.ga4 || null;
-  const users = g ? Number(g.users) || 0 : 0;
-  const sessions = g ? Number(g.sessions) || 0 : 0;
   const evs = g ? Object.values(g.events || {}) : [];
-  // Tracked actions only: events set up in lib/google.js, plus visits to a site's app path. Page views are not counted.
-  const actions = !g ? 0 : evs.reduce((t, v) => t + (Number((v || {}).count) || 0), 0) + (g.path ? Number(g.path.views) || 0 : 0);
+  return {
+    days: series.length,
+    half,
+    impr: sumOf(series, 'impressions'),
+    clicks: sumOf(series, 'clicks'),
+    early: sumOf(series.slice(0, half), 'impressions'),
+    late: sumOf(series.slice(half), 'impressions'),
+    active: series.filter((p) => num(p.impressions) > 0).length, // days with any search impressions
+    hasGa4: !!g,
+    position: site.search ? site.search.position : null, // average Search Console position
+    queryCount: site.search ? site.search.queryCount : null,
+    striking: site.search ? site.search.striking : null,
+    newUsers: g && g.newUsers != null ? num(g.newUsers) : null,
+    engagedSecs: g && g.engagedSeconds != null ? num(g.engagedSeconds) : null,
+    users: g ? num(g.users) : 0,
+    sessions: g ? num(g.sessions) : 0,
+    // Tracked actions only: events set up in lib/google.js, plus visits to a site's app path. Page views are not counted.
+    actions: !g ? 0 : evs.reduce((t, v) => t + num((v || {}).count), 0) + (g.path ? num(g.path.views) : 0),
+  };
+}
+
+// Rank credit: 1 at position 10 or better, falling to 0 at position 50. Counts in full from 100 impressions
+function rankCredit(st) {
+  if (st.position == null || st.position <= 0) return 0;
+  return Math.max(0, Math.min(1, (50 - st.position) / 40)) * Math.min(1, st.impr / 100);
+}
+
+// Return use, 0 to 20: share of users who came back plus time engaged per user, weighted by how many users there are.
+// Falls back to sessions per user if Analytics did not return new-user figures.
+function returnUse(st) {
+  const weight = Math.min(1, st.users / 100);
+  if (st.newUsers == null || st.engagedSecs == null) return 10 * Math.max(0, st.sessions / Math.max(st.users, 1) - 1) * weight;
+  const returning = Math.max(0, st.users - st.newUsers);
+  const share = st.users > 0 ? returning / st.users : 0;
+  const secs = st.users > 0 ? st.engagedSecs / st.users : 0;
+  return (12 * Math.min(1, share / GOOD.returning) + 8 * Math.min(1, secs / GOOD.engagedSecs)) * weight;
+}
+
+function autoParts(site) {
+  const st = autoStats(site);
   return [
-    20 * lg(impr, TARGET.impressions), // Visibility: impressions in search, last 28 days
-    (10 + 5 * Math.log2((late + 5) / (early + 5))) * Math.min(1, (early + late) / 200), // Momentum: last 14 days against the 14 before (flat = 10), weighted by volume
-    20 * lg(sumOf(series, 'clicks'), TARGET.clicks), // Clicks: people who actually arrived from search
-    10 * lg(users, TARGET.users) + 10 * lg(actions, TARGET.actions), // Real use: users, plus calculator and other tracked actions
-    10 * Math.max(0, sessions / Math.max(users, 1) - 1) * Math.min(1, users / 100), // Return use: sessions per user (1 = none, 3 = full), weighted by how many users
+    // Visibility: impressions in search, last 28 days. Spread over 3 weeks or more earns full credit, a one-day spike earns about half
+    20 * lg(st.impr, TARGET.impressions) * (0.5 + 0.5 * Math.min(1, st.active / 21)),
+    (10 + 5 * Math.log2((st.late + 5) / (st.early + 5))) * Math.min(1, (st.early + st.late) / 200), // Momentum: latest half against the half before (flat = 10), weighted by volume
+    14 * lg(st.clicks, TARGET.clicks) + 6 * rankCredit(st), // Clicks and rank: people who arrived from search, plus how close the site ranks to page one
+    10 * lg(st.users, TARGET.users) + 10 * lg(st.actions, TARGET.actions), // Real use: users, plus calculator and other tracked actions
+    returnUse(st), // Return use: users who came back and time engaged
   ].map((n) => Math.round(clamp(n)));
+}
+
+// One plain line per measure, shown under its bar when a single site is selected
+function partNotes(site) {
+  const st = autoStats(site);
+  const cur = st.days - st.half;
+  const breadth = st.queryCount == null ? '' : `, ${fmtN(st.queryCount)} different queries${st.striking ? `, ${fmtN(st.striking)} near page one` : ''}`;
+  let ret;
+  if (!st.hasGa4) ret = 'No Analytics data for this site';
+  else if (st.users === 0) ret = 'No users yet';
+  else if (st.newUsers == null || st.engagedSecs == null) ret = `${(st.sessions / st.users).toFixed(1)} sessions per user. 3 is full marks, counts in full from 100 users`;
+  else {
+    const back = Math.max(0, st.users - st.newUsers);
+    ret = `${fmtN(back)} of ${fmtN(st.users)} users came back, ${fmtN(st.engagedSecs / st.users)} seconds engaged per user. Full marks at ${GOOD.returning * 100}% and ${GOOD.engagedSecs} seconds, counts in full from 100 users`;
+  }
+  return [
+    `${fmtN(st.impr)} impressions on ${st.active} of ${st.days} days${breadth}. Full marks at ${fmtN(TARGET.impressions)}, spread over 3 weeks or more`,
+    st.early + st.late === 0
+      ? 'No impressions yet'
+      : `${fmtN(st.late)} in the latest ${cur} days, ${fmtN(st.early)} in the ${st.half} before.${st.early + st.late < 200 ? ' Counts in full from 200 impressions' : ''}`,
+    `${fmtN(st.clicks)} clicks (full marks at ${fmtN(TARGET.clicks)})${st.position == null ? ', no ranking data yet' : `, average position ${st.position} (full rank credit at 10 or better, none past 50)`}`,
+    st.hasGa4 ? `${fmtN(st.users)} users, ${fmtN(st.actions)} tracked actions. Full marks at ${fmtN(TARGET.users)} and ${fmtN(TARGET.actions)}` : 'No Analytics data for this site',
+    ret,
+  ];
+}
+
+// How far to trust the score. With very little data it moves on noise, so a zone such as "Pause" should not be read literally
+function confidence(site) {
+  const st = autoStats(site);
+  let level = 'high';
+  const reasons = [];
+  if (st.impr < 100) { level = 'low'; reasons.push('Under 100 impressions in 28 days, so the score moves on noise'); }
+  else if (st.impr < 500) { level = 'medium'; reasons.push('Small numbers, read the score as a rough guide'); }
+  if (!st.hasGa4) { if (level === 'high') level = 'medium'; reasons.push('No Analytics data, so Real use and Return use score 0'); }
+  return { level, note: reasons.length ? reasons.join('. ') : 'Enough data to read the score' };
 }
 
 // The 28 days before the current window
@@ -72,6 +146,7 @@ function priorRange(range, days = 28) {
 // Meter reading for one site, built only from its live Search Console and Analytics data
 function buildVitality(def, site, hist, now = new Date()) {
   const nums = autoParts(site);
+  const notes = partNotes(site);
   const score = nums.reduce((a, n) => a + n, 0);
   const launched = parseDate((hist.launched || {})[def.key] || LAUNCHED[def.key]);
   const ageDays = launched ? Math.max(0, Math.floor((now.getTime() - launched.getTime()) / 864e5)) : null;
@@ -87,7 +162,8 @@ function buildVitality(def, site, hist, now = new Date()) {
     baseline: ageDays != null && ageDays < BASELINE_DAYS,
     ageDays,
     auto: true,
-    parts: PARTS.map((label, k) => ({ label, score: nums[k] })),
+    parts: PARTS.map((label, k) => ({ label, score: nums[k], max: 20, note: notes[k] })),
+    confidence: confidence(site),
     trend: trend
       ? {
           current: trend.current,
@@ -166,7 +242,7 @@ async function liveMetrics() {
       try {
         const [d, trend] = await Promise.all([searchData(auth, s, range), searchTrend(auth, s, 28).catch(() => null)]);
         const byDate = new Map(d.series.map((p) => [p.date, p]));
-        return { ...meta, series: range.days.map((dt) => byDate.get(dt) || zero(dt)), queries: d.queries, trend };
+        return { ...meta, series: range.days.map((dt) => byDate.get(dt) || zero(dt)), queries: d.queries, search: d.stats, trend };
       } catch (e) {
         return { ...meta, series: range.days.map(zero), queries: [], trend: null, error: String(e.message).slice(0, 200) };
       }
@@ -196,7 +272,7 @@ async function liveMetrics() {
       try {
         const [d, g] = await Promise.all([searchData(auth, def, prior), def.ga4 ? ga4Data(auth, def, prior) : null]);
         const byDate = new Map(d.series.map((p) => [p.date, p]));
-        s.prior = { series: prior.days.map((dt) => byDate.get(dt) || zero(dt)), ga4: g };
+        s.prior = { series: prior.days.map((dt) => byDate.get(dt) || zero(dt)), ga4: g, search: d.stats };
       } catch (e) {
         s.prior = null;
       }
