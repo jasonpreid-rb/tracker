@@ -1,7 +1,7 @@
 import Head from 'next/head';
 import { useCallback, useEffect, useState } from 'react';
 
-const DASH = { rb: undefined, ez: '10 6', ttc: '2 6' };
+const DASH = { rb: undefined, ez: '10 6', ttc: '2 6', ig: '14 5 2 5' };
 
 const Coffin = ({ w = 24 }) => (
   <svg viewBox="0 0 60 84" style={{ width: w, height: w * 1.4, flex: 'none' }} role="img" aria-label="Coffin, the dead end of the scale">
@@ -41,12 +41,12 @@ function Chart({ sites, metric = 'impressions' }) {
 }
 
 // Small trend line for the per-site progress cards
-function Spark({ series, color, dash }) {
+function Spark({ series, color, dash, field = 'impressions' }) {
   const W = 300, H = 56, n = Math.max(2, series.length);
-  const max = Math.max(1, ...series.map((p) => p.impressions || 0));
-  const pts = series.map((p, i) => `${(i / (n - 1)) * W},${H - 4 - ((p.impressions || 0) / max) * (H - 10)}`).join(' ');
+  const max = Math.max(1, ...series.map((p) => p[field] || 0));
+  const pts = series.map((p, i) => `${(i / (n - 1)) * W},${H - 4 - ((p[field] || 0) / max) * (H - 10)}`).join(' ');
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 56, marginTop: 8 }} role="img" aria-label="Impressions per day, last 28 days">
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 56, marginTop: 8 }} role="img" aria-label={`${field} per day, last 28 days`}>
       <polyline points={pts} fill="none" stroke={color} strokeWidth="3" strokeDasharray={dash} strokeLinecap="round" />
     </svg>
   );
@@ -126,6 +126,20 @@ function progress(s) {
   };
 }
 
+// Social accounts (Instagram) have no Search Console data. The API marks them with type: 'social'.
+const isSocial = (s) => s.type === 'social';
+const LABEL = { impressions: 'Impressions', clicks: 'Clicks', reach: 'Reach', views: 'Views' };
+const signed = (n) => (n == null ? '' : n > 0 ? `+${fmt(n)}` : n < 0 ? `−${fmt(Math.abs(n))}` : '±0');
+const pct1 = (a, b) => (b > 0 ? `${((a / b) * 100).toFixed(1)}%` : '–');
+
+// Second half of the window against the first half, for one field of a daily series
+function halves(series, f) {
+  const ser = series || [];
+  const half = Math.floor(ser.length / 2);
+  const tot = (a) => a.reduce((x, p) => x + (p[f] || 0), 0);
+  return { cur: tot(ser.slice(half)), prev: tot(ser.slice(0, half)), all: tot(ser), days: ser.length - half, before: half };
+}
+
 export default function Dashboard() {
   const [key, setKey] = useState('');
   const [data, setData] = useState(null);
@@ -157,9 +171,14 @@ export default function Dashboard() {
   const picked = data && view !== 'all' ? data.sites.filter((s) => s.key === view) : [];
   const shown = data ? (picked.length ? picked : data.sites) : [];
   const single = shown.length === 1 ? shown[0] : null;
-  const scope = single ? single.name : 'all 3 sites';
+  const social = !!single && isSocial(single);
+  const chartSites = social ? [single] : shown.filter((s) => !isSocial(s));
+  const hasSocial = shown.some(isSocial);
+  const scope = single ? single.name : hasSocial ? `the ${chartSites.length} websites` : `all ${chartSites.length} sites`;
+  const chartMetrics = social ? ['reach'] : ['impressions', 'clicks'];
+  const metricNow = chartMetrics.includes(metric) ? metric : chartMetrics[0];
 
-  const sum = (f) => shown.reduce((a, s) => a + s.series.reduce((b, p) => b + (p[f] || 0), 0), 0);
+  const sum = (f) => chartSites.reduce((a, s) => a + (s.series || []).reduce((b, p) => b + (p[f] || 0), 0), 0);
 
   const backlinks = data
     ? single
@@ -167,7 +186,7 @@ export default function Dashboard() {
       : data.backlinks.latest
     : [];
 
-  const progressCard = (s) => {
+  const searchProgressCard = (s) => {
     const p = progress(s);
     return (
       <div className="card" key={`p-${s.key}`}>
@@ -186,7 +205,7 @@ export default function Dashboard() {
     );
   };
 
-  const queriesCard = (s) => (
+  const searchQueriesCard = (s) => (
     <div className="card" key={`q-${s.key}`}>
       <h2 className="sitehead"><span className="dot" style={{ background: s.color, boxShadow: `0 0 10px ${s.color}` }} />{s.name}: top queries</h2>
       <div className="row th"><span>Query</span><span>Impressions</span></div>
@@ -196,7 +215,7 @@ export default function Dashboard() {
     </div>
   );
 
-  const useCard = (s) => (
+  const searchUseCard = (s) => (
     <div className="card" key={`u-${s.key}`}>
       <h2 className="sitehead"><span className="dot" style={{ background: s.color, boxShadow: `0 0 10px ${s.color}` }} />{s.name}: real use</h2>
       <div className="lbl" style={{ marginTop: 6 }}>Google Analytics, same 28 days</div>
@@ -211,6 +230,76 @@ export default function Dashboard() {
       {s.key === 'rb' && <div className="lbl">Registrations and submissions are in Supabase, not shown here.</div>}
     </div>
   );
+
+  const socialProgressCard = (s) => {
+    const so = s.social || {};
+    const r = halves(s.series, 'reach');
+    const active = (s.series || []).filter((p) => (p.reach || 0) > 0).length;
+    return (
+      <div className="card" key={`p-${s.key}`}>
+        <h2 className="sitehead"><span className="dot" style={{ background: s.color, boxShadow: `0 0 10px ${s.color}` }} />{s.name}: progress</h2>
+        <div className="lbl" style={{ marginTop: 6 }}>Last {r.days} days against the {r.before} before{s.handle ? `, ${s.handle}` : ''}</div>
+        <div className="row th"><span>Measure</span><span>Now</span></div>
+        <div className="row"><span>Followers</span><span>{fmt(so.followers)}{so.followersChange != null ? ` (${signed(so.followersChange)} in 28 days)` : ''}</span></div>
+        <div className="row"><span>Reach</span><span>{fmt(r.cur)} ({change(r.prev, r.cur)})</span></div>
+        <div className="row"><span>Views</span><span>{fmt(so.views)}{so.views != null && so.viewsPrev != null ? ` (${change(so.viewsPrev, so.views).replace('vs earlier half', 'vs previous 28 days')})` : ''}</span></div>
+        <div className="row"><span>Engagement rate, 28 days</span><span>{so.interactions == null ? '–' : pct1(so.interactions, so.reach != null ? so.reach : r.all)}</span></div>
+        <div className="row"><span>Days with reach</span><span>{active} of {(s.series || []).length}</span></div>
+        <div className="row"><span>Meter score</span><span>{vitalityLabel(s.vitality)}</span></div>
+        <Spark series={s.series || []} color={s.color} dash={DASH[s.key]} field="reach" />
+      </div>
+    );
+  };
+
+  const socialPostsCard = (s) => {
+    const posts = (s.social && s.social.topPosts) || [];
+    return (
+      <div className="card" key={`q-${s.key}`}>
+        <h2 className="sitehead"><span className="dot" style={{ background: s.color, boxShadow: `0 0 10px ${s.color}` }} />{s.name}: top posts</h2>
+        <div className="row th"><span>Post</span><span>Reach</span></div>
+        {posts.length === 0 && !s.socialError && <div className="row">No posts in this window yet</div>}
+        {posts.map((p, i) => {
+          const text = String(p.caption || 'Untitled post').replace(/\s+/g, ' ').slice(0, 48);
+          const ok = typeof p.permalink === 'string' && p.permalink.startsWith('https://');
+          return (
+            <div className="row" key={p.id || i}>
+              <span>{ok ? <a href={p.permalink} target="_blank" rel="noreferrer" style={{ color: 'inherit' }}>{text}</a> : text}</span>
+              <span>{fmt(p.reach)}{p.likes != null ? `, ${fmt(p.likes)} likes` : ''}</span>
+            </div>
+          );
+        })}
+        {s.socialError && <div className="bad">Instagram: {s.socialError}</div>}
+      </div>
+    );
+  };
+
+  const socialUseCard = (s) => {
+    const so = s.social;
+    const rows = so ? [
+      ['Profile views', so.profileViews],
+      ['Taps on the profile link', so.linkTaps],
+      ['Accounts engaged', so.accountsEngaged],
+      ['Posts published', so.posts28],
+    ].filter(([, v]) => v != null) : [];
+    return (
+      <div className="card" key={`u-${s.key}`}>
+        <h2 className="sitehead"><span className="dot" style={{ background: s.color, boxShadow: `0 0 10px ${s.color}` }} />{s.name}: real use</h2>
+        <div className="lbl" style={{ marginTop: 6 }}>Instagram insights, same 28 days</div>
+        {rows.length > 0 && (
+          <>
+            <div className="row th"><span>Measure</span><span>Last 28 days</span></div>
+            {rows.map(([label, value]) => <div className="row" key={label}><span>{label}</span><span>{fmt(value)}</span></div>)}
+          </>
+        )}
+        {!so && !s.socialError && <div className="row">Not connected yet</div>}
+        {s.socialError && <div className="bad">Instagram: {s.socialError}</div>}
+      </div>
+    );
+  };
+
+  const progressCard = (s) => (isSocial(s) ? socialProgressCard(s) : searchProgressCard(s));
+  const queriesCard = (s) => (isSocial(s) ? socialPostsCard(s) : searchQueriesCard(s));
+  const useCard = (s) => (isSocial(s) ? socialUseCard(s) : searchUseCard(s));
 
   return (
     <div className="page">
@@ -228,7 +317,7 @@ export default function Dashboard() {
       <div className="head">
         <div>
           <h1>Traffic overview</h1>
-          <div className="lbl">{data ? `Last 28 days, ${data.range.startDate} to ${data.range.endDate}` : 'Ripping Bombs, eazie and TrueTravelCost in one view'}</div>
+          <div className="lbl">{data ? `Last 28 days, ${data.range.startDate} to ${data.range.endDate}` : 'Ripping Bombs, eazie, TrueTravelCost and Instagram in one view'}</div>
         </div>
         {data && <button className="btn" onClick={() => load(key)} disabled={busy}>{busy ? 'Refreshing' : 'Refresh data'}</button>}
       </div>
@@ -257,40 +346,52 @@ export default function Dashboard() {
           </div>
 
           <div className="grid4 cards">
-            <div className="card"><div className="lbl">Total impressions</div><div className="big">{fmt(sum('impressions'))}</div><div className="lbl">Search Console, {scope}</div></div>
-            <div className="card"><div className="lbl">Total clicks</div><div className="big">{fmt(sum('clicks'))}</div><div className="lbl">Search Console, {scope}</div></div>
-            <div className="card">
-              <div className="lbl">Backlinks added</div>
-              <div className="big">{fmt(single ? backlinks.length : data.backlinks.count)}</div>
-              <div className="lbl">{single ? 'In the latest list, this site' : 'Last 28 days, Backlinks tab'}</div>
-            </div>
-            <div className="card"><div className="lbl">Experiments running</div><div className="big">{fmt(data.experiments.running)}</div><div className="lbl">{single ? 'All sites, not split by site' : 'No decision yet, Experiments tab'}</div></div>
+            {social ? (
+              <>
+                <div className="card"><div className="lbl">Followers</div><div className="big">{fmt(single.social && single.social.followers)}</div><div className="lbl">{single.social && single.social.followersChange != null ? `${signed(single.social.followersChange)} in 28 days` : 'Instagram, now'}</div></div>
+                <div className="card"><div className="lbl">Total reach</div><div className="big">{fmt(single.social && single.social.reach != null ? single.social.reach : sum('reach'))}</div><div className="lbl">Instagram, last 28 days</div></div>
+                <div className="card"><div className="lbl">Profile link taps</div><div className="big">{fmt(single.social && single.social.linkTaps)}</div><div className="lbl">Instagram, last 28 days</div></div>
+                <div className="card"><div className="lbl">Posts published</div><div className="big">{fmt(single.social && single.social.posts28)}</div><div className="lbl">Instagram, last 28 days</div></div>
+              </>
+            ) : (
+              <>
+                <div className="card"><div className="lbl">Total impressions</div><div className="big">{fmt(sum('impressions'))}</div><div className="lbl">Search Console, {scope}</div></div>
+                <div className="card"><div className="lbl">Total clicks</div><div className="big">{fmt(sum('clicks'))}</div><div className="lbl">Search Console, {scope}</div></div>
+                <div className="card">
+                  <div className="lbl">Backlinks added</div>
+                  <div className="big">{fmt(single ? backlinks.length : data.backlinks.count)}</div>
+                  <div className="lbl">{single ? 'In the latest list, this site' : 'Last 28 days, Backlinks tab'}</div>
+                </div>
+                <div className="card"><div className="lbl">Experiments running</div><div className="big">{fmt(data.experiments.running)}</div><div className="lbl">{single ? 'All sites, not split by site' : 'No decision yet, Experiments tab'}</div></div>
+              </>
+            )}
           </div>
           {data.sheetError && <div className="bad">Google Sheet problem: {data.sheetError}</div>}
 
           <div className="card">
             <div className="between">
-              <h2>{metric === 'clicks' ? 'Clicks' : 'Impressions'} per day{single ? `, ${single.name}` : ', by site'}</h2>
+              <h2>{LABEL[metricNow]} per day{single ? `, ${single.name}` : ', by site'}</h2>
               <div className="between" style={{ gap: 18 }}>
                 <div className="legend">
-                  {shown.map((s) => (
+                  {chartSites.map((s) => (
                     <span key={s.key}><i style={{ borderTop: `3px ${DASH[s.key] ? (s.key === 'ttc' ? 'dotted' : 'dashed') : 'solid'} ${s.color}` }} />{s.name}</span>
                   ))}
                 </div>
-                <div className="seg" role="group" aria-label="Chart measure">
-                  <button className={metric === 'impressions' ? 'on' : ''} aria-pressed={metric === 'impressions'} onClick={() => setMetric('impressions')}>Impressions</button>
-                  <button className={metric === 'clicks' ? 'on' : ''} aria-pressed={metric === 'clicks'} onClick={() => setMetric('clicks')}>Clicks</button>
+                <div className="seg" role="group" aria-label="Chart measure" style={chartMetrics.length < 2 ? { display: 'none' } : undefined}>
+                  {chartMetrics.map((m) => (
+                    <button key={m} className={metricNow === m ? 'on' : ''} aria-pressed={metricNow === m} onClick={() => setMetric(m)}>{LABEL[m]}</button>
+                  ))}
                 </div>
               </div>
             </div>
-            <Chart sites={shown} metric={metric} />
-            {sum(metric) === 0 && <div className="lbl">No {metric} in this window yet, so every line sits at zero.</div>}
+            <Chart sites={chartSites} metric={metricNow} />
+            {sum(metricNow) === 0 && <div className="lbl">No {metricNow} in this window yet, so every line sits at zero.</div>}
           </div>
 
           <div className="card meters">
             <div>
               <h2>Is {single ? single.name : 'each site'} worth pursuing?</h2>
-              <div className="lbl">{single ? 'Five measures, 0 to 20 each, built automatically from Search Console and Google Analytics.' : 'One marker per site, built automatically from Search Console and Google Analytics. Five measures, 0 to 20 each, nothing typed in by hand.'}</div>
+              <div className="lbl">{single ? (social ? 'Five measures, 0 to 20 each, built automatically from Instagram insights.' : 'Five measures, 0 to 20 each, built automatically from Search Console and Google Analytics.') : 'One marker per site, built automatically from Search Console, Google Analytics and Instagram insights. Five measures, 0 to 20 each, nothing typed in by hand.'}</div>
             </div>
             {shown.map((s) => (
               <div key={s.key}>
@@ -346,12 +447,12 @@ export default function Dashboard() {
             </>
           )}
 
-          <div className="card">
+          {!social && <div className="card">
             <h2>Latest backlinks{single ? `, ${single.name}` : ''}</h2>
             <div className="row th"><span>Source</span><span>Site</span></div>
             {backlinks.length === 0 && <div className="row">{single ? 'None logged yet for this site' : 'None logged yet'}</div>}
             {backlinks.map((l, i) => <div className="row" key={i}><span>{l.url}</span><span>{l.site}</span></div>)}
-          </div>
+          </div>}
         </>
       )}
 

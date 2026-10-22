@@ -2,6 +2,11 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { SITES, getAuth, dateRange, searchData, searchTrend, ga4Data, sheetData, parseDate } from '../../lib/google';
+import { buildInstagramSite } from '../../lib/instagram';
+
+// The websites tracked in Search Console. Instagram is not a website and cannot be verified there, so any Instagram entry in SITES is skipped.
+// It is read from the Instagram API instead (see lib/instagram.js).
+const WEB = SITES.filter((s) => !/instagram|^ig$/i.test(String(s.key)) && !/instagram/i.test(JSON.stringify(s)));
 
 const clamp = (n) => Math.min(20, Math.max(0, Number(n) || 0));
 const iso = (d) => d.toISOString().slice(0, 10);
@@ -178,7 +183,7 @@ function buildVitality(def, site, hist, now = new Date()) {
 // Score parts, experiments and backlinks from data/manual.json (manual and hybrid modes)
 function manualExtras(m) {
   const parts = {};
-  for (const s of SITES) {
+  for (const s of WEB) {
     const d = (m.sites || {})[s.key] || {};
     parts[s.key] = Array.isArray(d.score) && d.score.length === 5 ? d.score : null;
   }
@@ -208,7 +213,7 @@ function manualMetrics() {
   const hist = readHistory();
   const range = manualRange(m);
   const extras = manualExtras(m);
-  const sites = SITES.map((s) => {
+  const sites = WEB.map((s) => {
     const d = (m.sites || {})[s.key] || {};
     const byDate = new Map((d.daily || []).map((r) => [r[0], { date: r[0], impressions: Number(r[1]) || 0, clicks: Number(r[2]) || 0 }]));
     return {
@@ -237,7 +242,7 @@ async function liveMetrics() {
 
   // Search Console, live (28 days, plus the 28 days before for the trend)
   const sites = await Promise.all(
-    SITES.map(async (s) => {
+    WEB.map(async (s) => {
       const meta = { key: s.key, name: s.name, short: s.short, color: s.color };
       try {
         const [d, trend] = await Promise.all([searchData(auth, s, range), searchTrend(auth, s, 28).catch(() => null)]);
@@ -252,7 +257,7 @@ async function liveMetrics() {
   // Google Analytics 4: real-use signals (skipped for a site with no GA4_* variable set)
   await Promise.all(
     sites.map(async (s) => {
-      const def = SITES.find((x) => x.key === s.key);
+      const def = WEB.find((x) => x.key === s.key);
       if (!def || !def.ga4) return;
       try {
         s.ga4 = await ga4Data(auth, def, range);
@@ -267,7 +272,7 @@ async function liveMetrics() {
   const prior = priorRange(range);
   await Promise.all(
     sites.map(async (s) => {
-      const def = SITES.find((x) => x.key === s.key);
+      const def = WEB.find((x) => x.key === s.key);
       if (!def || s.error) return;
       try {
         const [d, g] = await Promise.all([searchData(auth, def, prior), def.ga4 ? ga4Data(auth, def, prior) : null]);
@@ -280,6 +285,9 @@ async function liveMetrics() {
   );
 
   sites.forEach((x) => { x.vitality = buildVitality(x, x, hist); delete x.prior; });
+
+  // Instagram: read from the Instagram API when IG_ACCESS_TOKEN is set. It has no Search Console data, so it gets its own scoring.
+  if (process.env.IG_ACCESS_TOKEN) sites.push(await buildInstagramSite(range, prior, hist));
 
   let extra = { experiments: { running: null }, backlinks: { count: null, latest: [] }, sheetError: null };
 
