@@ -2,10 +2,9 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { SITES, getAuth, dateRange, searchData, searchTrend, ga4Data, sheetData, parseDate } from '../../lib/google';
-import { buildInstagramSite } from '../../lib/instagram';
+import { getVercelStats } from '../../lib/vercelAnalytics';
 
-// The websites tracked in Search Console. Instagram is not a website and cannot be verified there, so any Instagram entry in SITES is skipped.
-// It is read from the Instagram API instead (see lib/instagram.js).
+// The websites tracked in Search Console. Any Instagram entry left in SITES is skipped.
 const WEB = SITES.filter((s) => !/instagram|^ig$/i.test(String(s.key)) && !/instagram/i.test(JSON.stringify(s)));
 
 const clamp = (n) => Math.min(20, Math.max(0, Number(n) || 0));
@@ -268,6 +267,22 @@ async function liveMetrics() {
     })
   );
 
+  // Vercel Web Analytics: visitors, page views, top pages and referrers. A cross-check on GA4.
+  // Needs VERCEL_TOKEN, plus VERCEL_PROJECT_<KEY> per site (for example VERCEL_PROJECT_RB), and VERCEL_TEAM_ID for team projects.
+  if (process.env.VERCEL_TOKEN) {
+    await Promise.all(
+      sites.map(async (s) => {
+        const projectId = process.env[`VERCEL_PROJECT_${String(s.key).toUpperCase()}`];
+        if (!projectId) return;
+        try {
+          s.vercel = await getVercelStats(projectId, range.startDate, range.endDate);
+        } catch (e) {
+          s.vercelError = String(e.message).slice(0, 200);
+        }
+      })
+    );
+  }
+
   // Previous 28 days (Search Console and GA4), so the meter can show its movement
   const prior = priorRange(range);
   await Promise.all(
@@ -285,9 +300,6 @@ async function liveMetrics() {
   );
 
   sites.forEach((x) => { x.vitality = buildVitality(x, x, hist); delete x.prior; });
-
-  // Instagram: read from the Instagram API when IG_ACCESS_TOKEN is set. It has no Search Console data, so it gets its own scoring.
-  if (process.env.IG_ACCESS_TOKEN) sites.push(await buildInstagramSite(range, prior, hist));
 
   let extra = { experiments: { running: null }, backlinks: { count: null, latest: [] }, sheetError: null };
 
