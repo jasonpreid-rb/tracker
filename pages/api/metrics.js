@@ -270,12 +270,16 @@ async function liveMetrics() {
   // Vercel Web Analytics: visitors, page views, top pages and referrers. A cross-check on GA4.
   // Needs VERCEL_TOKEN, plus VERCEL_PROJECT_<KEY> per site (for example VERCEL_PROJECT_RB), and VERCEL_TEAM_ID for team projects.
   if (process.env.VERCEL_TOKEN) {
+    // Vercel has no reporting lag, unlike Search Console, so use the 28 days ending today
+    const vNow = new Date();
+    const vSince = iso(new Date(vNow.getTime() - 27 * 864e5));
+    const vUntil = iso(vNow);
     await Promise.all(
       sites.map(async (s) => {
         const projectId = process.env[`VERCEL_PROJECT_${String(s.key).toUpperCase()}`];
         if (!projectId) return;
         try {
-          s.vercel = await getVercelStats(projectId, range.startDate, range.endDate);
+          s.vercel = await getVercelStats(projectId, vSince, vUntil);
         } catch (e) {
           s.vercelError = String(e.message).slice(0, 200);
         }
