@@ -253,6 +253,14 @@ export default function Dashboard() {
           {s.vercel.note && <div className="row"><span>{s.vercel.note}</span></div>}
         </>
       )}
+      {s.activity && (
+        <>
+          <div className="row th"><span>Ripping Bombs activity</span><span>Last 28 days</span></div>
+          <div className="row"><span>Drives submitted</span><span>{fmt(s.activity.drives)}</span></div>
+          <div className="row"><span>New players</span><span>{fmt(s.activity.players)}</span></div>
+        </>
+      )}
+      {s.activityError && <div className="bad">Activity: {s.activityError}</div>}
       {!s.vercel && !s.vercelError && <div className="row">Vercel Web Analytics: not connected yet</div>}
       {s.vercelError && <div className="bad">Vercel: {s.vercelError}</div>}
       {s.key === 'rb' && <div className="lbl">Registrations and submissions are in Supabase, not shown here.</div>}
