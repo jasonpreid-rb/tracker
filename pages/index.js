@@ -193,6 +193,8 @@ export default function Dashboard() {
 
   const sum = (f) => chartSites.reduce((a, s) => a + (s.series || []).reduce((b, p) => b + (p[f] || 0), 0), 0);
   const vercelSites = chartSites.filter((s) => s.vercel);
+  const v24 = vercelSites.filter((s) => s.vercel.last24h != null);
+  const vercel24h = v24.length ? v24.reduce((a, s) => a + s.vercel.last24h, 0) : null;
   const vercelVisitors = vercelSites.length ? vercelSites.reduce((a, s) => a + (s.vercel.visitors || 0), 0) : null;
 
   const backlinks = data
@@ -322,7 +324,8 @@ export default function Dashboard() {
                   <div className="lbl">{single ? 'In the latest list, this site' : 'Last 28 days, Backlinks tab'}</div>
                 </div>
                 <div className="card"><div className="lbl">Experiments running</div><div className="big"><Num v={data.experiments.running} /></div><div className="lbl">{single ? 'All sites, not split by site' : 'No decision yet, Experiments tab'}</div></div>
-                <div className="card"><div className="lbl">Visitors</div><div className="big"><Num v={vercelVisitors} /></div><div className="lbl">Vercel Web Analytics, {scope}</div></div>
+                <div className="card"><div className="lbl">Visitors, last 28 days</div><div className="big"><Num v={vercelVisitors} /></div><div className="lbl">Vercel Web Analytics, {scope}</div></div>
+                <div className="card"><div className="lbl">Visitors, last 24 hours</div><div className="big"><Num v={vercel24h} /></div><div className="lbl">Vercel Web Analytics, as of the last refresh</div></div>
               </>
           </div>
           {data.sheetError && <div className="bad">Google Sheet problem: {data.sheetError}</div>}
@@ -434,6 +437,7 @@ export default function Dashboard() {
         .cards .card:nth-child(3) .big{background-image:linear-gradient(90deg,#FFB020,#FF5C7A)}
         .cards .card:nth-child(4) .big{background-image:linear-gradient(90deg,#6C8CFF,#C77DFF)}
         .cards .card:nth-child(5) .big{background-image:linear-gradient(90deg,#2EE6C5,#FFB020)}
+        .cards .card:nth-child(6) .big{background-image:linear-gradient(90deg,#FF7A3D,#FF2BA6)}
         .legend{display:flex;gap:16px;font-size:12px;flex-wrap:wrap}
         .legend span{display:flex;align-items:center;gap:6px}
         .legend i{display:inline-block;width:22px;height:0}
