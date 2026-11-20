@@ -11,6 +11,7 @@ const clamp = (n) => Math.min(20, Math.max(0, Number(n) || 0));
 const iso = (d) => d.toISOString().slice(0, 10);
 
 const BASELINE_DAYS = 90; // a site younger than this is shown as "baseline"
+const MIN_VISITORS_BASE = 5; // visitors needed in the earlier half before the Vercel trend is trusted, since Vercel only counts from the day it was switched on
 const MIN_PREVIOUS = 30; // impressions needed in the previous 28 days before a trend is trusted
 
 function authorized(req) {
@@ -35,7 +36,7 @@ function readHistory() {
 // The five measures behind each meter, all calculated from live data. Each is 0 to 20 and the meter is their sum.
 const PARTS = ['Visibility', 'Momentum', 'Clicks and rank', 'Real use', 'Return use'];
 // What counts as full marks. Scales are square-root, so small numbers earn little until volume builds.
-const TARGET = { impressions: 1000, clicks: 100, users: 200, actions: 50 }; // per 28 days
+const TARGET = { impressions: 1000, clicks: 100, users: 200, actions: 50, visitorsMomentum: 50 }; // per 28 days (visitorsMomentum: visitors in 28 days for traffic momentum to count in full)
 const GOOD = { returning: 0.25, engagedSecs: 60 }; // full marks for Return use: share of users who came back, seconds engaged per user
 // Launch dates for the baseline flag. Add one for a new site; data/history.json can still override.
 const LAUNCHED = { ez: '2026-09-24', ttc: '2026-09-24' };
@@ -52,6 +53,7 @@ function autoStats(site) {
   const series = site.series || [];
   const half = Math.floor(series.length / 2);
   const g = site.ga4 || null;
+  const v = site.vercel || null; // Vercel Web Analytics, when connected
   const evs = g ? Object.values(g.events || {}) : [];
   return {
     days: series.length,
@@ -68,6 +70,11 @@ function autoStats(site) {
     newUsers: g && g.newUsers != null ? num(g.newUsers) : null,
     engagedSecs: g && g.engagedSeconds != null ? num(g.engagedSeconds) : null,
     users: g ? num(g.users) : 0,
+    // Visitors for Real use and Momentum: the higher of Google Analytics users and Vercel visitors, because analytics scripts can be blocked
+    visitors: Math.max(g ? num(g.users) : 0, v ? num(v.visitors) : 0),
+    hasVercel: !!v,
+    vEarly: v && v.early != null ? num(v.early) : null, // Vercel visitors, earlier 14 days
+    vLate: v && v.late != null ? num(v.late) : null, // Vercel visitors, latest 14 days
     sessions: g ? num(g.sessions) : 0,
     // Tracked actions only: events set up in lib/google.js, plus visits to a site's app path. Page views are not counted.
     actions: !g ? 0 : evs.reduce((t, v) => t + num((v || {}).count), 0) + (g.path ? num(g.path.views) : 0),
@@ -91,14 +98,26 @@ function returnUse(st) {
   return (12 * Math.min(1, share / GOOD.returning) + 8 * Math.min(1, secs / GOOD.engagedSecs)) * weight;
 }
 
+// Momentum, 0 to 20 (flat = 10). Search impressions and Vercel visitors each compare the latest half with the half before.
+// Each is weighted by how much data it has, so a site growing through social still scores with few search impressions.
+function momentum(st) {
+  const raw = (late, early) => 10 + 5 * Math.log2((late + 5) / (early + 5));
+  const ws = Math.min(1, (st.early + st.late) / 200);
+  const useV = st.vEarly != null && st.vEarly >= MIN_VISITORS_BASE;
+  const wv = useV ? Math.min(1, (st.vEarly + st.vLate) / TARGET.visitorsMomentum) : 0;
+  const total = ws + wv;
+  if (total === 0) return 0;
+  return ((raw(st.late, st.early) * ws + (useV ? raw(st.vLate, st.vEarly) * wv : 0)) / total) * Math.min(1, total);
+}
+
 function autoParts(site) {
   const st = autoStats(site);
   return [
     // Visibility: impressions in search, last 28 days. Spread over 3 weeks or more earns full credit, a one-day spike earns about half
     20 * lg(st.impr, TARGET.impressions) * (0.5 + 0.5 * Math.min(1, st.active / 21)),
-    (10 + 5 * Math.log2((st.late + 5) / (st.early + 5))) * Math.min(1, (st.early + st.late) / 200), // Momentum: latest half against the half before (flat = 10), weighted by volume
+    momentum(st), // Momentum: search impressions and visitors, latest half against the half before (flat = 10), weighted by volume
     14 * lg(st.clicks, TARGET.clicks) + 6 * rankCredit(st), // Clicks and rank: people who arrived from search, plus how close the site ranks to page one
-    10 * lg(st.users, TARGET.users) + 10 * lg(st.actions, TARGET.actions), // Real use: users, plus calculator and other tracked actions
+    10 * lg(st.visitors, TARGET.users) + 10 * lg(st.actions, TARGET.actions), // Real use: visitors, plus calculator and other tracked actions
     returnUse(st), // Return use: users who came back and time engaged
   ].map((n) => Math.round(clamp(n)));
 }
@@ -118,11 +137,16 @@ function partNotes(site) {
   }
   return [
     `${fmtN(st.impr)} impressions on ${st.active} of ${st.days} days${breadth}. Full marks at ${fmtN(TARGET.impressions)}, spread over 3 weeks or more`,
-    st.early + st.late === 0
-      ? 'No impressions yet'
-      : `${fmtN(st.late)} in the latest ${cur} days, ${fmtN(st.early)} in the ${st.half} before.${st.early + st.late < 200 ? ' Counts in full from 200 impressions' : ''}`,
+    (st.early + st.late === 0
+      ? 'No impressions yet.'
+      : `${fmtN(st.late)} impressions in the latest ${cur} days, ${fmtN(st.early)} in the ${st.half} before.${st.early + st.late < 200 ? ' Counts in full from 200 impressions.' : ''}`) +
+      (st.vEarly == null
+        ? ''
+        : st.vEarly < MIN_VISITORS_BASE
+          ? ` Visitors: ${fmtN(st.vLate)} in the latest 14 days, ${fmtN(st.vEarly)} in the 14 before, too few to count as a trend yet.`
+          : ` Visitors: ${fmtN(st.vLate)} in the latest 14 days, ${fmtN(st.vEarly)} in the 14 before. Counts in full from ${TARGET.visitorsMomentum} visitors.`),
     `${fmtN(st.clicks)} clicks (full marks at ${fmtN(TARGET.clicks)})${st.position == null ? ', no ranking data yet' : `, average position ${st.position} (full rank credit at 10 or better, none past 50)`}`,
-    st.hasGa4 ? `${fmtN(st.users)} users, ${fmtN(st.actions)} tracked actions. Full marks at ${fmtN(TARGET.users)} and ${fmtN(TARGET.actions)}` : 'No Analytics data for this site',
+    st.hasGa4 || st.hasVercel ? `${fmtN(st.visitors)} visitors${st.hasVercel && st.hasGa4 ? ' (the higher of Google Analytics and Vercel)' : st.hasVercel ? ' (Vercel)' : ''}, ${fmtN(st.actions)} tracked actions. Full marks at ${fmtN(TARGET.users)} and ${fmtN(TARGET.actions)}` : 'No Analytics or Vercel data for this site',
     ret,
   ];
 }
@@ -132,8 +156,8 @@ function confidence(site) {
   const st = autoStats(site);
   let level = 'high';
   const reasons = [];
-  if (st.impr < 100) { level = 'low'; reasons.push('Under 100 impressions in 28 days, so the score moves on noise'); }
-  else if (st.impr < 500) { level = 'medium'; reasons.push('Small numbers, read the score as a rough guide'); }
+  if (st.impr < 100 && st.visitors < 50) { level = 'low'; reasons.push('Under 100 impressions and 50 visitors in 28 days, so the score moves on noise'); }
+  else if (st.impr < 500 && st.visitors < 150) { level = 'medium'; reasons.push('Small numbers, read the score as a rough guide'); }
   if (!st.hasGa4) { if (level === 'high') level = 'medium'; reasons.push('No Analytics data, so Real use and Return use score 0'); }
   return { level, note: reasons.length ? reasons.join('. ') : 'Enough data to read the score' };
 }
@@ -157,7 +181,7 @@ function buildVitality(def, site, hist, now = new Date()) {
   const trend = site.trend;
   // Change against the previous 28 days, only once that period had enough search data to mean something
   let change = null;
-  if (site.prior && sumOf(site.prior.series, 'impressions') >= MIN_PREVIOUS) {
+  if (site.prior && (sumOf(site.prior.series, 'impressions') >= MIN_PREVIOUS || (site.prior.vercel && site.prior.vercel.visitors >= MIN_PREVIOUS))) {
     change = score - autoParts(site.prior).reduce((a, n) => a + n, 0);
   }
   return {
@@ -280,6 +304,13 @@ async function liveMetrics() {
         if (!projectId) return;
         try {
           s.vercel = await getVercelStats(projectId, vSince, vUntil);
+          // blocks are visitors per 14 days, oldest first: 2 and 3 are now, 0 and 1 are the 28 days before
+          const b = s.vercel.blocks;
+          if (b) {
+            s.vercel.early = b[2];
+            s.vercel.late = b[3];
+            s.vercelPrior = { visitors: b[0] + b[1], early: b[0], late: b[1] };
+          }
         } catch (e) {
           s.vercelError = String(e.message).slice(0, 200);
         }
@@ -296,14 +327,14 @@ async function liveMetrics() {
       try {
         const [d, g] = await Promise.all([searchData(auth, def, prior), def.ga4 ? ga4Data(auth, def, prior) : null]);
         const byDate = new Map(d.series.map((p) => [p.date, p]));
-        s.prior = { series: prior.days.map((dt) => byDate.get(dt) || zero(dt)), ga4: g, search: d.stats };
+        s.prior = { series: prior.days.map((dt) => byDate.get(dt) || zero(dt)), ga4: g, search: d.stats, vercel: s.vercelPrior || null };
       } catch (e) {
         s.prior = null;
       }
     })
   );
 
-  sites.forEach((x) => { x.vitality = buildVitality(x, x, hist); delete x.prior; });
+  sites.forEach((x) => { x.vitality = buildVitality(x, x, hist); delete x.prior; delete x.vercelPrior; });
 
   let extra = { experiments: { running: null }, backlinks: { count: null, latest: [] }, sheetError: null };
 
