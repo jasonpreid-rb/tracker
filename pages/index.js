@@ -137,6 +137,24 @@ function vercelRows(v, ga) {
   return rows;
 }
 
+// Counts a number up from 0 when it first shows or changes. Skipped for reduced motion and for non-numbers.
+function Num({ v }) {
+  const [n, setN] = useState(typeof v === 'number' ? 0 : v);
+  useEffect(() => {
+    if (typeof v !== 'number' || window.matchMedia('(prefers-reduced-motion: reduce)').matches) { setN(v); return undefined; }
+    let raf;
+    const t0 = performance.now();
+    const step = (t) => {
+      const k = Math.min(1, (t - t0) / 900);
+      setN(v * (1 - Math.pow(1 - k, 3)));
+      if (k < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [v]);
+  return <>{fmt(typeof n === 'number' ? Math.round(n) : n)}</>;
+}
+
 export default function Dashboard() {
   const [key, setKey] = useState('');
   const [data, setData] = useState(null);
@@ -251,7 +269,7 @@ export default function Dashboard() {
         <link rel="icon" href="/favicon.ico" sizes="48x48" />
         <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+        <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet" />
       </Head>
 
       <div className="head">
@@ -259,6 +277,18 @@ export default function Dashboard() {
           <h1>Traffic overview</h1>
           <div className="lbl">{data ? `Last 28 days, ${data.range.startDate} to ${data.range.endDate}` : 'Ripping Bombs, eazie and TrueTravelCost in one view'}</div>
         </div>
+        <div className="tabs" role="group" aria-label="Choose which site to show">
+            <button className={`tab${!single ? ' on' : ''}`} aria-pressed={!single} onClick={() => setView('all')}>All sites</button>
+            {data.sites.map((s) => {
+              const on = !!single && single.key === s.key;
+              return (
+                <button key={s.key} className={`tab${on ? ' on' : ''}`} aria-pressed={on} onClick={() => setView(s.key)} style={on ? { borderColor: s.color, boxShadow: `0 0 12px ${s.color}55` } : undefined}>
+                  <span className="dot" style={{ background: s.color }} />{s.name}
+                </button>
+              );
+            })}
+          </div>
+
         {data && <button className="btn" onClick={() => load(key)} disabled={busy}>{busy ? 'Refreshing' : 'Refresh data'}</button>}
       </div>
 
@@ -273,29 +303,17 @@ export default function Dashboard() {
 
       {data && (
         <>
-          <div className="tabs" role="group" aria-label="Choose which site to show">
-            <button className={`tab${!single ? ' on' : ''}`} aria-pressed={!single} onClick={() => setView('all')}>All sites</button>
-            {data.sites.map((s) => {
-              const on = !!single && single.key === s.key;
-              return (
-                <button key={s.key} className={`tab${on ? ' on' : ''}`} aria-pressed={on} onClick={() => setView(s.key)} style={on ? { borderColor: s.color, boxShadow: `0 0 12px ${s.color}55` } : undefined}>
-                  <span className="dot" style={{ background: s.color }} />{s.name}
-                </button>
-              );
-            })}
-          </div>
-
           <div className="grid4 cards">
             <>
-                <div className="card"><div className="lbl">Total impressions</div><div className="big">{fmt(sum('impressions'))}</div><div className="lbl">Search Console, {scope}</div></div>
-                <div className="card"><div className="lbl">Total clicks</div><div className="big">{fmt(sum('clicks'))}</div><div className="lbl">Search Console, {scope}</div></div>
+                <div className="card"><div className="lbl">Total impressions</div><div className="big"><Num v={sum('impressions')} /></div><div className="lbl">Search Console, {scope}</div></div>
+                <div className="card"><div className="lbl">Total clicks</div><div className="big"><Num v={sum('clicks')} /></div><div className="lbl">Search Console, {scope}</div></div>
                 <div className="card">
                   <div className="lbl">Backlinks added</div>
-                  <div className="big">{fmt(single ? backlinks.length : data.backlinks.count)}</div>
+                  <div className="big"><Num v={single ? backlinks.length : data.backlinks.count} /></div>
                   <div className="lbl">{single ? 'In the latest list, this site' : 'Last 28 days, Backlinks tab'}</div>
                 </div>
-                <div className="card"><div className="lbl">Experiments running</div><div className="big">{fmt(data.experiments.running)}</div><div className="lbl">{single ? 'All sites, not split by site' : 'No decision yet, Experiments tab'}</div></div>
-                <div className="card"><div className="lbl">Visitors</div><div className="big">{fmt(vercelVisitors)}</div><div className="lbl">Vercel Web Analytics, {scope}</div></div>
+                <div className="card"><div className="lbl">Experiments running</div><div className="big"><Num v={data.experiments.running} /></div><div className="lbl">{single ? 'All sites, not split by site' : 'No decision yet, Experiments tab'}</div></div>
+                <div className="card"><div className="lbl">Visitors</div><div className="big"><Num v={vercelVisitors} /></div><div className="lbl">Vercel Web Analytics, {scope}</div></div>
               </>
           </div>
           {data.sheetError && <div className="bad">Google Sheet problem: {data.sheetError}</div>}
@@ -389,56 +407,60 @@ export default function Dashboard() {
       )}
 
       <style jsx global>{`
-        body{margin:0;background:#0B0D14}
-        .page{font-family:'IBM Plex Sans',sans-serif;color:#F2F4FA;min-height:100vh;box-sizing:border-box;padding:28px 36px 48px;display:flex;flex-direction:column;gap:20px;background:radial-gradient(900px 420px at 12% -5%,rgba(255,43,166,.22),transparent 60%),radial-gradient(800px 400px at 95% 0%,rgba(46,230,197,.16),transparent 60%),#0B0D14}
-        h1{margin:0;font-size:38px;font-weight:600;letter-spacing:-.5px;background:linear-gradient(90deg,#FF2BA6,#FFB020);-webkit-background-clip:text;background-clip:text;color:transparent;display:inline-block}
-        h2{margin:0;font-size:16px;font-weight:600}
-        .head,.between{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
-        .card{background:linear-gradient(160deg,#171C2E,#101424);border:1px solid #2A3250;box-shadow:0 12px 30px rgba(0,0,0,.35);border-radius:12px;padding:18px}
-        .grid4{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}
-        .grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
-        .lbl{font-size:13px;color:#A3ACC2}
-        .big{font-size:42px;font-weight:600;margin:6px 0;display:inline-block;-webkit-background-clip:text;background-clip:text;color:transparent}
+        body{margin:0;background:radial-gradient(900px 420px at 8% -8%,rgba(255,43,166,.2),transparent 60%),radial-gradient(800px 420px at 98% -4%,rgba(46,230,197,.14),transparent 60%),#0B0D14 fixed}
+        .page{font-family:'Manrope',sans-serif;color:#F2F4FA;min-height:100vh;box-sizing:border-box;max-width:1480px;margin:0 auto;padding:14px 20px 40px;display:flex;flex-direction:column;gap:12px;font-variant-numeric:tabular-nums}
+        h1{margin:0;font-size:22px;font-weight:700;letter-spacing:-.3px;background:linear-gradient(90deg,#FF2BA6,#FFB020);-webkit-background-clip:text;background-clip:text;color:transparent;display:inline-block}
+        h2{margin:0;font-size:15px;font-weight:600}
+        .head{position:sticky;top:8px;z-index:5;display:flex;align-items:center;gap:10px 24px;flex-wrap:wrap;padding:10px 16px;border-radius:16px;background:rgba(16,20,36,.72);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border:1px solid rgba(255,255,255,.08)}
+        .head .tabs{margin-left:auto}
+        .between{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+        .card{background:rgba(23,28,46,.62);border:1px solid rgba(255,255,255,.07);border-radius:16px;padding:14px 16px}
+        .grid4{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+        .grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;align-items:start}
+        .lbl{font-size:12px;color:#9AA4BE}
+        .big{font-size:30px;font-weight:700;letter-spacing:-.5px;margin:2px 0;display:inline-block;-webkit-background-clip:text;background-clip:text;color:transparent}
+        .cards .card{padding:12px 14px}
         .cards .card:nth-child(1) .big{background-image:linear-gradient(90deg,#FF2BA6,#FF7A3D)}
         .cards .card:nth-child(2) .big{background-image:linear-gradient(90deg,#2EE6C5,#6C8CFF)}
         .cards .card:nth-child(3) .big{background-image:linear-gradient(90deg,#FFB020,#FF5C7A)}
         .cards .card:nth-child(4) .big{background-image:linear-gradient(90deg,#6C8CFF,#C77DFF)}
         .cards .card:nth-child(5) .big{background-image:linear-gradient(90deg,#2EE6C5,#FFB020)}
-        .legend{display:flex;gap:18px;font-size:13px;flex-wrap:wrap}
+        .legend{display:flex;gap:16px;font-size:12px;flex-wrap:wrap}
         .legend span{display:flex;align-items:center;gap:6px}
         .legend i{display:inline-block;width:22px;height:0}
-        .row{display:flex;justify-content:space-between;gap:12px;padding:10px 0;font-size:13px;color:#A3ACC2;word-break:break-all}
-        .th{border-bottom:1px solid #2A3250;font-size:12px;padding:12px 0 8px}
-        .dot{width:10px;height:10px;border-radius:50%;flex:none;display:inline-block}
+        .row{display:flex;justify-content:space-between;gap:12px;padding:6px 0;font-size:12.5px;color:#9AA4BE;word-break:break-all}
+        .th{border-bottom:1px solid rgba(255,255,255,.08);font-size:11.5px;padding:10px 0 6px}
+        .dot{width:9px;height:9px;border-radius:50%;flex:none;display:inline-block}
         .sitehead{display:flex;align-items:center;gap:8px}
-        .meters{display:flex;flex-direction:column;gap:16px;padding:22px}
+        .meters{display:flex;flex-direction:column;gap:10px;padding:16px 18px}
         .mrow{display:flex;align-items:center;gap:12px}
-        .mname{width:190px;flex:none;font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px}
-        .track{flex:1;min-width:0;position:relative;height:36px}
-        .bar{position:absolute;left:0;right:0;top:14px;height:8px;border-radius:4px;background:linear-gradient(90deg,#FF5C7A,#FFB020 50%,#2EE6C5)}
-        .mark{position:absolute;top:3px;width:30px;height:30px;margin-left:-15px;border-radius:50%;background:#0B0D14;border:3px solid;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;box-sizing:border-box;transition:left .6s}
-        .zones{display:flex;justify-content:space-between;font-size:12px;color:#A3ACC2;padding:0 40px 0 244px}
-        .parts{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px 20px;margin:14px 0 0 202px;padding-right:40px}
-        .part{font-size:13px;color:#F2F4FA;display:flex;flex-direction:column;gap:6px}
+        .mname{width:170px;flex:none;font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px}
+        .track{flex:1;min-width:0;position:relative;height:32px}
+        .bar{position:absolute;left:0;right:0;top:12px;height:8px;border-radius:4px;background:linear-gradient(90deg,#FF5C7A,#FFB020 50%,#2EE6C5)}
+        .mark{position:absolute;top:1px;width:30px;height:30px;margin-left:-15px;border-radius:50%;background:#0B0D14;border:3px solid;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;box-sizing:border-box;transition:left .9s cubic-bezier(.2,.8,.2,1)}
+        .zones{display:flex;justify-content:space-between;font-size:11.5px;color:#9AA4BE;padding:0 40px 0 194px}
+        .parts{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px 18px;margin:10px 0 0 182px;padding-right:40px}
+        .part{font-size:12.5px;color:#F2F4FA;display:flex;flex-direction:column;gap:5px}
         .part .between{gap:8px;flex-wrap:nowrap}
-        .part .between span:last-child{color:#A3ACC2}
-        .ptrack{height:6px;border-radius:3px;background:#2A3250;overflow:hidden}
-        .pfill{height:100%;border-radius:3px}
-        .tabs{display:flex;gap:10px;flex-wrap:wrap}
-        .tab{display:flex;align-items:center;gap:8px;background:#101424;color:#A3ACC2;font:inherit;font-size:14px;font-weight:500;border:1px solid #2A3250;border-radius:999px;padding:8px 16px;cursor:pointer}
-        .tab.on{color:#F2F4FA;background:#171C2E;border-color:#6C8CFF}
+        .part .between span:last-child{color:#9AA4BE}
+        .ptrack{height:6px;border-radius:3px;background:rgba(255,255,255,.09);overflow:hidden}
+        .pfill{height:100%;border-radius:3px;transform-origin:left;animation:grow 1s cubic-bezier(.2,.8,.2,1) both}
+        @keyframes grow{from{transform:scaleX(0)}}
+        .tabs{display:flex;gap:8px;flex-wrap:wrap}
+        .tab{display:flex;align-items:center;gap:8px;background:transparent;color:#9AA4BE;font:inherit;font-size:13px;font-weight:600;border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:6px 14px;cursor:pointer;transition:color .15s,border-color .15s,background .15s}
+        .tab.on{color:#F2F4FA;background:rgba(108,140,255,.16);border-color:#6C8CFF}
         .tab:hover{color:#F2F4FA}
-        .seg{display:flex;border:1px solid #2A3250;border-radius:999px;overflow:hidden}
-        .seg button{background:transparent;color:#A3ACC2;font:inherit;font-size:12px;border:0;padding:6px 14px;cursor:pointer}
-        .seg button.on{background:#2A3250;color:#F2F4FA}
+        .seg{display:flex;border:1px solid rgba(255,255,255,.1);border-radius:999px;overflow:hidden}
+        .seg button{background:transparent;color:#9AA4BE;font:inherit;font-size:12px;border:0;padding:5px 12px;cursor:pointer}
+        .seg button.on{background:rgba(255,255,255,.1);color:#F2F4FA}
         .gate{max-width:420px;display:flex;flex-direction:column;gap:12px}
-        .gate input{background:#0B0D14;color:#F2F4FA;border:1px solid #2A3250;border-radius:8px;padding:10px 12px;font:inherit}
-        .btn{background:linear-gradient(90deg,#FF2BA6,#FF7A3D);color:#0B0D14;font:inherit;font-weight:600;border:0;border-radius:999px;padding:10px 18px;cursor:pointer}
+        .gate input{background:#0B0D14;color:#F2F4FA;border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:10px 12px;font:inherit}
+        .btn{background:linear-gradient(90deg,#FF2BA6,#FF7A3D);color:#0B0D14;font:inherit;font-size:13px;font-weight:700;border:0;border-radius:999px;padding:8px 16px;cursor:pointer}
         .btn:disabled{opacity:.6;cursor:default}
         .btn:focus-visible,.gate input:focus-visible,.tab:focus-visible,.seg button:focus-visible{outline:2px solid #2EE6C5;outline-offset:2px}
         .bad{color:#FF8FA3;font-size:13px}
-        @media (max-width:700px){.page{padding:20px 16px 40px}.mrow{flex-wrap:wrap;row-gap:6px}.mname{width:100%}.zones{padding:0 40px 0 36px;font-size:11px;gap:6px}.parts{margin:14px 0 0 0;padding-right:0}}
-        @media (prefers-reduced-motion:reduce){.mark{transition:none}}
+        @media (max-width:700px){.page{padding:10px 12px 32px}.head .tabs{margin-left:0}.mrow{flex-wrap:wrap;row-gap:4px}.mname{width:100%}.zones{padding:0 40px 0 36px;font-size:11px;gap:6px}.parts{margin:10px 0 0 0;padding-right:0}}
+        @media (prefers-reduced-motion:reduce){.mark{transition:none}.pfill{animation:none}}
       `}</style>
     </div>
   );
