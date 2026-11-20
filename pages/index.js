@@ -232,6 +232,7 @@ export default function Dashboard() {
           {(s.vercel.topPages || []).map((p) => <div className="row" key={`pg-${p.path}`}><span>{p.path}</span><span>{fmt(p.views)}</span></div>)}
           {(s.vercel.referrers || []).length > 0 && <div className="row th"><span>Top referrers</span><span>Visitors</span></div>}
           {(s.vercel.referrers || []).map((r) => <div className="row" key={`rf-${r.host}`}><span>{r.host}</span><span>{fmt(r.visitors)}</span></div>)}
+          {s.vercel.note && <div className="row"><span>{s.vercel.note}</span></div>}
         </>
       )}
       {!s.vercel && !s.vercelError && <div className="row">Vercel Web Analytics: not connected yet</div>}
