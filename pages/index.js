@@ -277,6 +277,7 @@ export default function Dashboard() {
           <h1>Traffic overview</h1>
           <div className="lbl">{data ? `Last 28 days, ${data.range.startDate} to ${data.range.endDate}` : 'Ripping Bombs, eazie and TrueTravelCost in one view'}</div>
         </div>
+        {data && (
         <div className="tabs" role="group" aria-label="Choose which site to show">
             <button className={`tab${!single ? ' on' : ''}`} aria-pressed={!single} onClick={() => setView('all')}>All sites</button>
             {data.sites.map((s) => {
@@ -288,7 +289,7 @@ export default function Dashboard() {
               );
             })}
           </div>
-
+        )}
         {data && <button className="btn" onClick={() => load(key)} disabled={busy}>{busy ? 'Refreshing' : 'Refresh data'}</button>}
       </div>
 
